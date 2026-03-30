@@ -1,0 +1,9 @@
+[plugin]
+name        = "soundcloud"
+version     = "0.1.0"
+type        = "stream-provider"
+entrypoint  = "soundcloud.wasm"
+description = "SoundCloud music streaming (OAuth browser-auth demo)"
+
+[permissions]
+network_hosts = ["api.soundcloud.com", "secure.soundcloud.com"]

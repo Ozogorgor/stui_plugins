@@ -1,0 +1,15 @@
+[plugin]
+name = "example-resolver"
+version = "0.1.0"
+type = "resolver"
+entrypoint = "plugin.wasm"
+description = "A minimal example stream resolver plugin"
+
+[permissions]
+network = true
+filesystem = []
+
+[meta]
+author = ""
+license = "Apache-2.0"
+homepage = ""

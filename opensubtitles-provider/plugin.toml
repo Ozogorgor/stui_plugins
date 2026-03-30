@@ -1,0 +1,54 @@
+# opensubtitles-provider — plugin manifest
+# Install at: ~/.stui/plugins/opensubtitles-provider/plugin.toml
+
+[plugin]
+name        = "opensubtitles-provider"
+version     = "0.1.0"
+description = "Search and fetch subtitles from OpenSubtitles.com"
+author      = "stui"
+abi_version = 1
+type        = "subtitle-provider"  # provides subtitle tracks for detail panel
+tags        = ["subtitles", "movies", "tv", "anime"]
+
+[env]
+OS_API_KEY  = ""                   # required — OpenSubtitles API key
+OS_USERNAME = ""                   # optional — enables authenticated downloads (higher quota)
+OS_PASSWORD = ""                   # optional
+OS_LANGUAGE = "en"                 # comma-separated BCP-47 language codes e.g. "en,fr,ar"
+
+[config]
+[[config]]
+key       = "api_key"
+label     = "OpenSubtitles API Key"
+hint      = "Get at https://www.opensubtitles.com/en/consumers"
+masked    = true
+required  = true
+
+[[config]]
+key       = "username"
+label     = "Username (optional)"
+hint      = "Enables authenticated downloads for higher quota"
+masked    = false
+required  = false
+
+[[config]]
+key       = "password"
+label     = "Password (optional)"
+hint      = "Required if username is set"
+masked    = true
+required  = false
+
+[[config]]
+key       = "language"
+label     = "Subtitle Language"
+hint      = "Comma-separated BCP-47 codes (e.g. en,fr,es)"
+masked    = false
+required  = false
+default   = "en"
+
+[permissions]
+network = [
+  "api.opensubtitles.com",
+  "vip-api.opensubtitles.com",     # returned as base_url for VIP users
+  "dl.opensubtitles.com",          # actual subtitle file downloads
+]

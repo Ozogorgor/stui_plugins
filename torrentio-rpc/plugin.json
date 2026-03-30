@@ -1,0 +1,9 @@
+{
+  "name": "torrentio",
+  "version": "1.0.0",
+  "capabilities": ["streams"],
+  "description": "Stream provider via Torrentio — resolves IMDB IDs to magnet links and torrent URLs",
+  "author": "stui community",
+  "homepage": "https://torrentio.strem.fun",
+  "requires_network": true
+}

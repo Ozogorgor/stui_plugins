@@ -1,0 +1,41 @@
+# prowlarr-provider — plugin manifest
+# Install at: ~/.stui/plugins/prowlarr-provider/plugin.toml
+
+[plugin]
+name        = "prowlarr-provider"
+version     = "0.1.0"
+description = "Search torrents via a local Prowlarr instance"
+author      = "stui"
+abi_version = 1
+type        = "stream-provider"  # provides torrent stream URLs
+tags        = ["streams", "movies", "tv", "anime", "music"]
+
+[env]
+PROWLARR_URL     = "http://localhost:9696"    # your Prowlarr base URL
+PROWLARR_API_KEY = ""                         # Settings → General → API Key
+
+[config]
+[[config]]
+key       = "url"
+label     = "Prowlarr URL"
+hint      = "Base URL of your Prowlarr instance"
+masked    = false
+required  = true
+default   = "http://localhost:9696"
+
+[[config]]
+key       = "api_key"
+label     = "Prowlarr API Key"
+hint      = "Settings → General → API Key"
+masked    = true
+required  = true
+
+[permissions]
+# Prowlarr is typically on localhost — no external internet permission needed.
+# If your Prowlarr instance is remote, add its hostname here.
+network = ["localhost", "127.0.0.1", "::1"]
+
+[search]
+movie_categories  = "2000,2010,2020"
+series_categories = "5000,5040,5070"
+music_categories  = "3000,3010,3040"

@@ -1,0 +1,7 @@
+name = "Tidal"
+description = "Stream Tidal high-fidelity audio with OAuth"
+version = "0.1.0"
+plugin_type = "provider"
+
+[network]
+hosts = ["listen.tidal.com", "login.tidal.com", "api.tidal.com"]
