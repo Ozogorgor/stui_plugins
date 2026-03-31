@@ -10,6 +10,6 @@ network = true
 filesystem = []
 
 [meta]
-author = ""
-license = "Apache-2.0"
-homepage = ""
+author   = "stui"
+license  = "Apache-2.0"
+homepage = "https://github.com/Ozogorgor/stui_plugins"

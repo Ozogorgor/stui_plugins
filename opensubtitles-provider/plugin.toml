@@ -4,10 +4,9 @@
 [plugin]
 name        = "opensubtitles-provider"
 version     = "0.1.0"
+type        = "subtitle-provider"
+entrypoint  = "plugin.wasm"
 description = "Search and fetch subtitles from OpenSubtitles.com"
-author      = "stui"
-abi_version = 1
-type        = "subtitle-provider"  # provides subtitle tracks for detail panel
 tags        = ["subtitles", "movies", "tv", "anime"]
 
 [env]
@@ -47,8 +46,12 @@ required  = false
 default   = "en"
 
 [permissions]
-network = [
+network_hosts = [
   "api.opensubtitles.com",
-  "vip-api.opensubtitles.com",     # returned as base_url for VIP users
-  "dl.opensubtitles.com",          # actual subtitle file downloads
+  "vip-api.opensubtitles.com",
+  "dl.opensubtitles.com",
 ]
+
+[meta]
+author  = "stui"
+license = "Apache-2.0"

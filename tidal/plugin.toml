@@ -1,7 +1,13 @@
-name = "Tidal"
+[plugin]
+name        = "Tidal"
+version     = "0.1.0"
+type        = "stream-provider"
+entrypoint  = "plugin.wasm"
 description = "Stream Tidal high-fidelity audio with OAuth"
-version = "0.1.0"
-plugin_type = "provider"
 
-[network]
-hosts = ["listen.tidal.com", "login.tidal.com", "api.tidal.com"]
+[permissions]
+network_hosts = ["listen.tidal.com", "login.tidal.com", "api.tidal.com"]
+
+[meta]
+author  = "stui"
+license = "Apache-2.0"

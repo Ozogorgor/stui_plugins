@@ -1,16 +1,14 @@
 [plugin]
 name        = "hello-provider"
 version     = "0.1.0"
-type        = "metadata-provider"  # provides catalog search & trending
+type        = "metadata-provider"
 entrypoint  = "plugin.wasm"
 description = "Minimal example provider — returns hardcoded titles, no API key needed"
-abi_version = 1
 
 [permissions]
-network    = false
-filesystem = []
+network = false
 
 [meta]
-author   = "stui contributors"
+author   = "stui"
 license  = "Apache-2.0"
-homepage = "https://github.com/stui/stui"
+homepage = "https://github.com/Ozogorgor/stui_plugins"

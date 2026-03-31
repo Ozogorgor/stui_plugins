@@ -1,7 +1,13 @@
-name = "Roon"
+[plugin]
+name        = "Roon"
+version     = "0.1.0"
+type        = "stream-provider"
+entrypoint  = "plugin.wasm"
 description = "Control Roon audio server on local network"
-version = "0.1.0"
-plugin_type = "provider"
 
-[network]
-hosts = ["localhost", "127.0.0.1"]
+[permissions]
+network_hosts = ["localhost", "127.0.0.1"]
+
+[meta]
+author  = "stui"
+license = "Apache-2.0"

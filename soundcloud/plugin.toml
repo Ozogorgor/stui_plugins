@@ -1,9 +1,13 @@
 [plugin]
-name        = "soundcloud"
+name        = "SoundCloud"
 version     = "0.1.0"
 type        = "stream-provider"
-entrypoint  = "soundcloud.wasm"
-description = "SoundCloud music streaming (OAuth browser-auth demo)"
+entrypoint  = "plugin.wasm"
+description = "SoundCloud music streaming via yt-dlp"
 
 [permissions]
 network_hosts = ["api.soundcloud.com", "secure.soundcloud.com"]
+
+[meta]
+author  = "stui"
+license = "Apache-2.0"

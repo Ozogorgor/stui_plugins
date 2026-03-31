@@ -1,7 +1,13 @@
-name = "Qobuz"
+[plugin]
+name        = "Qobuz"
+version     = "0.1.0"
+type        = "stream-provider"
+entrypoint  = "plugin.wasm"
 description = "Stream Qobuz high-resolution audio with login credentials"
-version = "0.1.0"
-plugin_type = "provider"
 
-[network]
-hosts = ["play.qobuz.com", "www.qobuz.com", "open.qobuz.com"]
+[permissions]
+network_hosts = ["play.qobuz.com", "www.qobuz.com", "open.qobuz.com"]
+
+[meta]
+author  = "stui"
+license = "Apache-2.0"
