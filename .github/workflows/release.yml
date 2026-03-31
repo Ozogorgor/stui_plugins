@@ -1,0 +1,221 @@
+name: Build & Release Plugins
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-wasm:
+    name: Build ${{ matrix.plugin }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin:
+          - spotify
+          - tidal
+          - qobuz
+          - roon
+          - soundcloud
+          - jackett-provider
+          - prowlarr-provider
+          - opensubtitles-provider
+          - example-provider
+          - example-resolver
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.plugin }}
+
+      - name: Build
+        run: |
+          cargo build -p "${{ matrix.plugin }}" \
+            --target wasm32-wasip1 \
+            --release
+
+      - name: Package
+        run: |
+          DIR="${{ matrix.plugin }}"
+          CRATE=$(echo "$DIR" | tr '-' '_')
+          # Handle both flat and [plugin]-section TOML schemas
+          VERSION=$(grep '^version' "${DIR}/plugin.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+          ARCHIVE="${DIR}-${VERSION}.tar.gz"
+
+          mkdir staging
+          cp "target/wasm32-wasip1/release/${CRATE}.wasm" staging/plugin.wasm
+          cp "${DIR}/plugin.toml" staging/
+          tar -czf "${ARCHIVE}" -C staging .
+
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-${{ matrix.plugin }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+  build-rpc:
+    name: Build torrentio-rpc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('torrentio-rpc/plugin.json'))['version'])")
+          ARCHIVE="torrentio-rpc-${VERSION}.tar.gz"
+
+          mkdir staging
+          cp torrentio-rpc/plugin.py staging/
+          cp torrentio-rpc/plugin.json staging/
+          tar -czf "${ARCHIVE}" -C staging .
+
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-torrentio-rpc
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: [build-wasm, build-rpc]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: plugin-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate plugins.json
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          python3 - << 'PYEOF'
+          import json, hashlib, os, tomllib, glob
+
+          tag  = os.environ['RELEASE_TAG']
+          repo = os.environ['GITHUB_REPOSITORY']
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+
+          entries = []
+          for archive in sorted(glob.glob('dist/*.tar.gz')):
+              fname    = os.path.basename(archive)
+              checksum = f"sha256:{hashlib.sha256(open(archive,'rb').read()).hexdigest()}"
+
+              # "jackett-provider-0.1.0.tar.gz" -> dir="jackett-provider", ver="0.1.0"
+              stem       = fname.removesuffix('.tar.gz')
+              plugin_dir, version = stem.rsplit('-', 1)
+
+              description = ''
+              author      = 'stui community'
+              homepage    = None
+              exec_type   = 'wasm'
+
+              toml_path = f"{plugin_dir}/plugin.toml"
+              json_path = f"{plugin_dir}/plugin.json"
+
+              if os.path.exists(toml_path):
+                  with open(toml_path, 'rb') as f:
+                      meta = tomllib.load(f)
+                  # Support both flat fields and [plugin]/[meta] section schemas
+                  p    = meta.get('plugin', meta)     # prefer [plugin] section, fall back to root
+                  m    = meta.get('meta', {})          # [meta] section (example-provider style)
+                  description = p.get('description') or meta.get('description', '')
+                  author      = (p.get('author') or m.get('author') or
+                                 meta.get('author') or 'stui community')
+                  homepage    = p.get('homepage') or m.get('homepage') or meta.get('homepage')
+                  exec_type   = 'wasm'
+              elif os.path.exists(json_path):
+                  meta        = json.load(open(json_path))
+                  description = meta.get('description', '')
+                  author      = meta.get('author', 'stui community')
+                  homepage    = meta.get('homepage')
+                  exec_type   = 'rpc'
+
+              entry = {
+                  'name':        plugin_dir,
+                  'version':     version,
+                  'type':        exec_type,
+                  'description': description,
+                  'author':      author,
+                  'binary_url':  f"{base}/{fname}",
+                  'checksum':    checksum,
+              }
+              if homepage:
+                  entry['homepage'] = homepage
+              entries.append(entry)
+
+          entries.sort(key=lambda e: e['name'])
+
+          os.makedirs('pages', exist_ok=True)
+          with open('pages/plugins.json', 'w') as f:
+              json.dump(entries, f, indent=2)
+              f.write('\n')
+
+          print(f"Generated plugins.json — {len(entries)} entries:")
+          for e in entries:
+              print(f"  {e['name']} {e['version']} ({e['type']})")
+          PYEOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          generate_release_notes: true
+          body: |
+            ## Installing plugins
+
+            In stui: **Settings → Plugins → Manage Repos**, add:
+            ```
+            https://ozogorgor.github.io/stui_plugins
+            ```
+          files: |
+            dist/*.tar.gz
+            pages/plugins.json
+
+      - name: Deploy plugins.json to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: pages
+          keep_files: true
+          commit_message: "Update plugins.json for ${{ steps.tag.outputs.value }}"
