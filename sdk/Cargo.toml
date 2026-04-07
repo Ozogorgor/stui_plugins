@@ -22,14 +22,3 @@ default-features = false
 [features]
 default = []
 http    = ["dep:reqwest"]
-
-[profile.release]
-# Optimise for size — WASM bundles should be small
-opt-level = "z"
-lto       = true
-codegen-units = 1
-strip     = true
-panic     = "abort"   # required for wasm32-wasip1
-
-[profile.dev]
-panic = "abort"

@@ -46,9 +46,15 @@ use stui_plugin_sdk::prelude::*;
 pub struct JackettProvider;
 
 impl StuiPlugin for JackettProvider {
-    fn name(&self) -> &str { "jackett-provider" }
-    fn version(&self) -> &str { "0.1.0" }
-    fn plugin_type(&self) -> PluginType { PluginType::Provider }
+    fn name(&self) -> &str {
+        "jackett-provider"
+    }
+    fn version(&self) -> &str {
+        "0.1.0"
+    }
+    fn plugin_type(&self) -> PluginType {
+        PluginType::Provider
+    }
 
     fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse> {
         let cfg = match Config::load() {
@@ -58,10 +64,10 @@ impl StuiPlugin for JackettProvider {
 
         // Choose Newznab categories based on tab
         let categories = match req.tab.as_str() {
-            "movies"  => "2000,2010,2020,2030",
-            "series"  => "5000,5020,5040,5070,5080",
-            "music"   => "3000,3010,3020,3040",
-            _         => "2000,5000",
+            "movies" => "2000,2010,2020,2030",
+            "series" => "5000,5020,5040,5070,5080",
+            "music" => "3000,3010,3020,3040",
+            _ => "2000,5000",
         };
 
         let query_enc = url_encode(&req.query);
@@ -90,7 +96,8 @@ impl StuiPlugin for JackettProvider {
 
         plugin_info!("jackett: {} results", envelope.results.len());
 
-        let items: Vec<PluginEntry> = envelope.results
+        let items: Vec<PluginEntry> = envelope
+            .results
             .into_iter()
             .take(req.limit as usize)
             .map(|r| r.into_entry())
@@ -115,11 +122,12 @@ impl StuiPlugin for JackettProvider {
             return PluginResult::err("RESOLVE_ERROR", "no MagnetUri, Link, or InfoHash");
         };
 
-        plugin_info!("jackett: resolve → {}", &stream_url[..stream_url.len().min(80)]);
+        let truncated: String = stream_url.chars().take(80).collect();
+        plugin_info!("jackett: resolve → {}", truncated);
 
         PluginResult::ok(ResolveResponse {
             stream_url,
-            quality: None,  // quality comes from the title string (e.g. "1080p")
+            quality: None, // quality comes from the title string (e.g. "1080p")
             subtitles: vec![],
         })
     }
@@ -138,28 +146,28 @@ struct JackettEnvelope {
 #[derive(Debug, Deserialize)]
 struct JackettResult {
     #[serde(rename = "Title", default)]
-    title:      String,
+    title: String,
     #[serde(rename = "Size", default)]
-    size:       u64,            // bytes
+    size: u64, // bytes
     #[serde(rename = "Seeders", default)]
-    seeders:    i32,
+    seeders: i32,
     #[serde(rename = "Peers", default)]
-    peers:      i32,            // total peers (seeders + leechers)
+    peers: i32, // total peers (seeders + leechers)
     #[serde(rename = "Tracker", default)]
-    tracker:    String,
+    tracker: String,
     #[serde(rename = "Link", default)]
-    link:       String,         // direct .torrent download URL (may be empty)
+    link: String, // direct .torrent download URL (may be empty)
     #[serde(rename = "MagnetUri", default)]
-    magnet_uri: String,         // full magnet link (may be empty)
+    magnet_uri: String, // full magnet link (may be empty)
     #[serde(rename = "InfoHash", default)]
-    info_hash:  String,         // 40-char hex SHA1 (may be empty)
+    info_hash: String, // 40-char hex SHA1 (may be empty)
     #[serde(rename = "Imdb", default)]
-    imdb:       Option<i64>,    // IMDB numeric ID (0 or null if absent)
+    imdb: Option<i64>, // IMDB numeric ID (0 or null if absent)
 }
 
 impl JackettResult {
     fn into_entry(self) -> PluginEntry {
-        let quality  = extract_quality(&self.title);
+        let quality = extract_quality(&self.title);
         let size_str = humanize_bytes(self.size);
         let leechers = (self.peers - self.seeders).max(0);
         let meta = format!(
@@ -172,19 +180,18 @@ impl JackettResult {
         // '|' separates magnet from link.  Fields may be empty strings.
         let id = format!("{}|{}|{}", self.info_hash, self.magnet_uri, self.link);
 
-        let imdb_id = self.imdb
-            .filter(|&i| i > 0)
-            .map(|i| format!("tt{:07}", i));
+        let imdb_id = self.imdb.filter(|&i| i > 0).map(|i| format!("tt{:07}", i));
 
         PluginEntry {
             id,
-            title:       self.title,
-            year:        None,
-            genre:       Some(meta),   // seeders/size/tracker packed into genre slot
-            rating:      quality,      // "1080p", "4K", etc.
+            title: self.title,
+            year: None,
+            genre: Some(meta), // seeders/size/tracker packed into genre slot
+            rating: quality,   // "1080p", "4K", etc.
             description: None,
-            poster_url:  None,
+            poster_url: None,
             imdb_id,
+            duration: None,
         }
     }
 }
@@ -193,7 +200,7 @@ impl JackettResult {
 
 struct Config {
     base_url: String,
-    api_key:  String,
+    api_key: String,
 }
 
 impl Config {
@@ -201,13 +208,12 @@ impl Config {
         // The host passes env vars from plugin.toml [env] section to the plugin
         // via the cache under the key "__env:VAR_NAME".
         let base_url = env_or("JACKETT_URL", "http://localhost:9117");
-        let api_key  = env_or("JACKETT_API_KEY", "");
+        let api_key = env_or("JACKETT_API_KEY", "");
 
         if api_key.is_empty() {
-            return Err(
-                "JACKETT_API_KEY is not set. \
-                 Add it to ~/.config/stui/config.toml or set the env var.".into()
-            );
+            return Err("JACKETT_API_KEY is not set. \
+                 Add it to ~/.config/stui/config.toml or set the env var."
+                .into());
         }
 
         Ok(Config { base_url, api_key })
@@ -231,45 +237,28 @@ fn build_cat_params(cats: &str) -> String {
         .join("&")
 }
 
-/// Minimal percent-encoding for URL query values.
-fn url_encode(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9'
-            | '-' | '_' | '.' | '~' => vec![c],
-            ' ' => vec!['+'],
-            c => {
-                let mut buf = [0u8; 4];
-                let bytes = c.encode_utf8(&mut buf).as_bytes();
-                bytes.iter().flat_map(|&b| {
-                    let hex = |n: u8| -> char {
-                        if n < 10 { (b'0' + n) as char } else { (b'a' + n - 10) as char }
-                    };
-                    vec!['%', hex(b >> 4), hex(b & 0xf)]
-                }).collect::<Vec<_>>()
-            }
-        })
-        .collect()
-}
-
 /// Split "{info_hash}|{magnet_uri}|{link}" packed ID.
 fn parse_entry_id(id: &str) -> (String, String, String) {
     let mut parts = id.splitn(3, '|');
-    let hash   = parts.next().unwrap_or("").to_string();
+    let hash = parts.next().unwrap_or("").to_string();
     let magnet = parts.next().unwrap_or("").to_string();
-    let link   = parts.next().unwrap_or("").to_string();
+    let link = parts.next().unwrap_or("").to_string();
     (hash, magnet, link)
 }
 
 /// Try to extract a quality string from a release title.
 fn extract_quality(title: &str) -> Option<String> {
     let t = title.to_uppercase();
-    for tag in &["2160P", "4K", "UHD", "1080P", "720P", "480P", "BDREMUX", "BLURAY", "WEB-DL"] {
+    for tag in &[
+        "2160P", "4K", "UHD", "1080P", "720P", "480P", "BDREMUX", "BLURAY", "WEB-DL",
+    ] {
         if t.contains(tag) {
-            return Some(tag.to_lowercase()
-                .replace("bdremux", "BD Remux")
-                .replace("bluray", "Blu-ray")
-                .replace("web-dl", "WEB-DL"));
+            return Some(
+                tag.to_lowercase()
+                    .replace("bdremux", "BD Remux")
+                    .replace("bluray", "Blu-ray")
+                    .replace("web-dl", "WEB-DL"),
+            );
         }
     }
     None

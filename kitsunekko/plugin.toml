@@ -1,0 +1,20 @@
+# kitsunekko — plugin manifest
+# Install at: ~/.stui/plugins/kitsunekko/
+
+[plugin]
+name        = "kitsunekko"
+version     = "0.1.0"
+description = "Kitsunekko — Japanese and English anime subtitles"
+author      = "stui"
+abi_version = 1
+type        = "subtitle-provider"
+tags        = ["subtitles", "anime", "japanese"]
+
+[config]
+
+[permissions]
+network = true
+
+[capabilities]
+search = true
+resolve = true

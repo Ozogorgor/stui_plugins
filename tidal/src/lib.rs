@@ -1,19 +1,20 @@
 // Tidal plugin for stui
 //
-// Uses OAuth with public client_id for authentication.
+// Uses OAuth PKCE with a public client_id for authentication.
 // Requires a Tidal subscription.
 //
 // Flow:
-// 1. Generate PKCE code_verifier and code_challenge
+// 1. Generate PKCE code_verifier + code_challenge
 // 2. Open browser for OAuth login at listen.tidal.com
-// 3. Exchange auth code for access_token/refresh_token
-// 4. search() - use Tidal API
-// 5. resolve() - use Tidal API for stream URL
+// 3. Exchange auth code for access_token/refresh_token; store expires_at
+// 4. On subsequent calls: check expiry, refresh silently if stale
+// 5. search()  — Tidal API v1/search with countryCode
+// 6. resolve() — Tidal API v1/tracks/{id}/streamUrl with countryCode
 
 use stui_plugin_sdk::{
     auth_allocate_port, auth_open_and_wait, cache_get, cache_set, http_post_form, plugin_info,
-    PluginEntry, PluginResult, PluginType, ResolveRequest, ResolveResponse, SearchRequest,
-    SearchResponse, StuiPlugin,
+    plugin_warn, PluginEntry, PluginResult, PluginType, ResolveRequest, ResolveResponse,
+    SearchRequest, SearchResponse, StuiPlugin,
 };
 
 const CLIENT_ID: &str = "CzET4vdadNUFQ5JU";
@@ -47,8 +48,10 @@ impl StuiPlugin for Tidal {
             });
         }
 
+        let cc = country_code();
         let url = format!(
-            "https://api.tidal.com/v1/search?limit=20&query={}",
+            "https://api.tidal.com/v1/search?limit=20&countryCode={}&query={}",
+            cc,
             urlencoding(query)
         );
 
@@ -73,14 +76,16 @@ impl StuiPlugin for Tidal {
             return PluginResult::err("resolve_failed", "empty entry_id");
         }
 
-        // entry_id should be a track ID
-        let track_id = match entry_id.parse::<u32>() {
+        let track_id = match entry_id.parse::<u64>() {
             Ok(id) => id,
             Err(_) => return PluginResult::err("resolve_failed", "invalid track id"),
         };
 
-        // Get track URL from Tidal API
-        let url = format!("https://api.tidal.com/v1/tracks/{}/streamUrl", track_id);
+        let cc = country_code();
+        let url = format!(
+            "https://api.tidal.com/v1/tracks/{}/streamUrl?soundQuality=LOSSLESS&countryCode={}",
+            track_id, cc
+        );
 
         let body = match http_get_with_token(&url, &token) {
             Ok(b) => b,
@@ -100,6 +105,9 @@ impl StuiPlugin for Tidal {
     }
 }
 
+// ── Token types ───────────────────────────────────────────────────────────────
+
+/// Raw response from Tidal's token endpoint.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -108,29 +116,79 @@ struct TokenResponse {
     token_type: String,
 }
 
+/// Persisted token — adds absolute `expires_at` so we can check staleness.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedToken {
+    access_token: String,
+    refresh_token: String,
+    /// Unix timestamp (seconds) at which the access token expires.
+    expires_at: u64,
+}
+
+fn build_cached_token(tr: TokenResponse) -> Result<CachedToken, String> {
+    let now = unix_now()?;
+    Ok(CachedToken {
+        access_token: tr.access_token,
+        refresh_token: tr.refresh_token,
+        expires_at: now + tr.expires_in.saturating_sub(60),
+    })
+}
+
+// ── Authentication ────────────────────────────────────────────────────────────
+
 fn ensure_authenticated() -> Result<String, String> {
     if let Some(cached) = cache_get("tidal_token") {
-        if let Ok(token) = serde_json::from_str::<TokenResponse>(&cached) {
-            return Ok(token.access_token);
+        if let Ok(token) = serde_json::from_str::<CachedToken>(&cached) {
+            let now = match unix_now() {
+                Ok(t) => t,
+                Err(_) => {
+                    return Err("clock unavailable".to_string());
+                }
+            };
+            if now < token.expires_at {
+                return Ok(token.access_token);
+            }
+            // Expired — attempt silent refresh before forcing a browser re-auth.
+            plugin_info!("tidal: access token expired, refreshing");
+            match refresh_access_token(&token.refresh_token) {
+                Ok(new_token) => {
+                    let json = serde_json::to_string(&new_token).map_err(|e| e.to_string())?;
+                    cache_set("tidal_token", &json);
+                    return Ok(new_token.access_token);
+                }
+                Err(e) => {
+                    plugin_warn!("tidal: token refresh failed ({}), re-authenticating", e);
+                    // Fall through to full PKCE flow below.
+                }
+            }
         }
     }
 
-    let (code_verifier, code_challenge) = generate_pkce();
-
+    let (code_verifier, code_challenge) = generate_pkce()?;
     let port = auth_allocate_port()?;
     let auth_url = build_auth_url(port, &code_challenge);
 
-    plugin_info!("Opening Tidal auth URL");
-
+    plugin_info!("tidal: opening OAuth URL");
     let cb = auth_open_and_wait(&auth_url, 120_000)?;
-    // Pass both the dynamic port AND the verifier so exchange_code can build
-    // the exact redirect_uri that was registered with the auth server.
-    let token = exchange_code(&cb.code, &code_verifier, port)?;
-
-    let json = serde_json::to_string(&token).map_err(|e| e.to_string())?;
+    let tr = exchange_code(&cb.code, &code_verifier, port)?;
+    let cached = build_cached_token(tr)?;
+    let json = serde_json::to_string(&cached).map_err(|e| e.to_string())?;
     cache_set("tidal_token", &json);
 
-    Ok(token.access_token)
+    Ok(cached.access_token)
+}
+
+fn refresh_access_token(refresh_token: &str) -> Result<CachedToken, String> {
+    let body = format!(
+        "client_id={}&refresh_token={}&grant_type=refresh_token",
+        CLIENT_ID,
+        urlencoding(refresh_token)
+    );
+    let resp = http_post_form("https://login.tidal.com/oauth2/token", &body)
+        .map_err(|e| format!("token refresh failed: {}", e))?;
+    let tr: TokenResponse =
+        serde_json::from_str(&resp).map_err(|e| format!("parse refresh response: {}", e))?;
+    Ok(build_cached_token(tr)?)
 }
 
 fn build_auth_url(port: u16, code_challenge: &str) -> String {
@@ -141,7 +199,6 @@ fn build_auth_url(port: u16, code_challenge: &str) -> String {
 }
 
 fn exchange_code(code: &str, code_verifier: &str, port: u16) -> Result<TokenResponse, String> {
-    // redirect_uri MUST match the one used in the authorization request exactly.
     let redirect_uri = format!("https://127.0.0.1:{}/login", port);
     let body = format!(
         "client_id={}&code={}&code_verifier={}&grant_type=authorization_code&redirect_uri={}",
@@ -151,38 +208,162 @@ fn exchange_code(code: &str, code_verifier: &str, port: u16) -> Result<TokenResp
     let resp = http_post_form("https://login.tidal.com/oauth2/token", &body)
         .map_err(|e| format!("token exchange failed: {}", e))?;
 
-    let token: TokenResponse =
-        serde_json::from_str(&resp).map_err(|e| format!("parse token response: {}", e))?;
-
-    Ok(token)
+    serde_json::from_str(&resp).map_err(|e| format!("parse token response: {}", e))
 }
 
-fn generate_pkce() -> (String, String) {
+// ── HTTP helper ───────────────────────────────────────────────────────────────
+
+fn http_get_with_token(url: &str, token: &str) -> Result<String, String> {
+    // Build the payload using serde_json to guarantee valid JSON (no raw string injection).
+    let payload = serde_json::json!({
+        "url": url,
+        "body": "",
+        "__stui_headers": {
+            "Authorization": format!("Bearer {}", token),
+            "X-Tidal-Token": CLIENT_ID,
+        }
+    })
+    .to_string();
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        extern "C" {
+            fn stui_http_post(ptr: *const u8, len: i32) -> i64;
+            fn stui_free(ptr: i32, len: i32);
+        }
+        let packed = unsafe { stui_http_post(payload.as_ptr(), payload.len() as i32) };
+        if packed == 0 {
+            return Err("http request failed".into());
+        }
+        let ptr = ((packed >> 32) & 0xFFFFFFFF) as *const u8;
+        let len = (packed & 0xFFFFFFFF) as usize;
+
+        let json = unsafe { std::str::from_utf8(std::slice::from_raw_parts(ptr, len)) }
+            .map_err(|e| e.to_string())?
+            .to_string();
+
+        unsafe { stui_free(ptr as i32, len as i32) };
+
+        let resp: HttpResponse = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        if resp.status >= 200 && resp.status < 300 {
+            Ok(resp.body)
+        } else {
+            Err(format!("HTTP {}: {}", resp.status, resp.body))
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        drop(payload);
+        Err("http_get_with_token only available in WASM context".into())
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)] // only constructed inside #[cfg(target_arch = "wasm32")] blocks
+struct HttpResponse {
+    status: u16,
+    body: String,
+}
+
+// ── Parsers ───────────────────────────────────────────────────────────────────
+
+fn parse_search_results(body: &str) -> Vec<PluginEntry> {
+    let val: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut items = Vec::new();
+
+    if let Some(tracks) = val["tracks"]["items"].as_array() {
+        for track in tracks {
+            let id = track["id"].as_u64().unwrap_or(0);
+            if id == 0 {
+                continue;
+            }
+            let title = track["title"].as_str().unwrap_or("Unknown").to_string();
+            let artist = track["artist"]["name"].as_str().unwrap_or("");
+            let album = track["album"]["title"].as_str().unwrap_or("");
+            let duration = track["duration"].as_u64().unwrap_or(0);
+            let image = track["album"]["coverUrl"]
+                .as_str()
+                .or_else(|| track["album"]["cover"]["large"].as_str());
+            let year = track["album"]["releaseDate"]
+                .as_str()
+                .and_then(|d| d.split('-').next())
+                .and_then(|y| y.parse::<u32>().ok());
+
+            items.push(PluginEntry {
+                id: id.to_string(),
+                title: if artist.is_empty() {
+                    title
+                } else {
+                    format!("{} — {}", title, artist)
+                },
+                year,
+                genre: None,
+                rating: None,
+                description: if album.is_empty() {
+                    None
+                } else {
+                    Some(album.to_string())
+                },
+                poster_url: image.map(String::from),
+                imdb_id: None,
+                duration: Some(format_duration(duration)),
+            });
+        }
+    }
+
+    items
+}
+
+fn parse_stream_url(body: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(body).ok()?;
+
+    for key in &["url", "streamUrl"] {
+        if let Some(url) = val[key].as_str().filter(|s| !s.is_empty()) {
+            return Some(url.to_string());
+        }
+    }
+
+    None
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Returns the user's country code for API requests.
+/// Reads from plugin config; defaults to "US".
+fn country_code() -> String {
+    cache_get("__config:country").unwrap_or_else(|| "US".to_string())
+}
+
+fn unix_now() -> Result<u64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|e| e.to_string())
+}
+
+fn format_duration(seconds: u64) -> String {
+    let mins = seconds / 60;
+    let secs = seconds % 60;
+    format!("{}:{:02}", mins, secs)
+}
+
+fn generate_pkce() -> Result<(String, String), String> {
     use sha2::{Digest, Sha256};
 
-    // 32 random bytes → 43-char base64url verifier (satisfies RFC 7636 §4.1)
     let mut verifier_bytes = [0u8; 32];
-    getrandom::getrandom(&mut verifier_bytes).unwrap_or_else(|_| {
-        // Fallback: mix nanosecond timestamp with a simple LCG — not ideal but
-        // still unpredictable enough for a short-lived local PKCE verifier.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let mut state = now.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        for b in verifier_bytes.iter_mut() {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            *b = (state >> 56) as u8;
-        }
-    });
+    getrandom::getrandom(&mut verifier_bytes)
+        .map_err(|e| format!("PKCE generation failed: {}", e))?;
 
     let verifier = base64_url_encode(verifier_bytes.to_vec());
-
-    // challenge = BASE64URL(SHA256(ASCII(verifier)))  — RFC 7636 §4.2, method S256
     let hash = Sha256::digest(verifier.as_bytes());
     let challenge = base64_url_encode(hash.to_vec());
 
-    (verifier, challenge)
+    Ok((verifier, challenge))
 }
 
 fn base64_url_encode(data: Vec<u8>) -> String {
@@ -202,9 +383,8 @@ fn base64_url_encode(data: Vec<u8>) -> String {
             0
         };
 
-        result.push(ALPHABET[(b0 >> 2)] as char);
+        result.push(ALPHABET[b0 >> 2] as char);
         result.push(ALPHABET[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
-
         if i + 1 < data.len() {
             result.push(ALPHABET[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
         }
@@ -215,115 +395,6 @@ fn base64_url_encode(data: Vec<u8>) -> String {
         i += 3;
     }
     result
-}
-
-fn http_get_with_token(url: &str, token: &str) -> Result<String, String> {
-    let payload = format!(
-        "{{\"url\":{},\"body\":\"\",\"__stui_headers\":{{\"Authorization\":\"Bearer {}\"}}}}",
-        serde_json::to_string(url).unwrap_or_default(),
-        token
-    );
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        extern "C" {
-            fn stui_http_post(ptr: *const u8, len: i32) -> i64;
-        }
-        let packed = unsafe { stui_http_post(payload.as_ptr(), payload.len() as i32) };
-        if packed == 0 {
-            return Err("http request failed".into());
-        }
-        let ptr = ((packed >> 32) & 0xFFFFFFFF) as *const u8;
-        let len = (packed & 0xFFFFFFFF) as usize;
-        let json = unsafe { std::str::from_utf8(std::slice::from_raw_parts(ptr, len)) }
-            .map_err(|e| e.to_string())?;
-
-        let resp: HttpResponse = serde_json::from_str(json).map_err(|e| e.to_string())?;
-        if resp.status >= 200 && resp.status < 300 {
-            Ok(resp.body)
-        } else {
-            Err(format!("HTTP {}: {}", resp.status, resp.body))
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (url, token, payload);
-        Err("http_get_with_token only available in WASM context".into())
-    }
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct HttpResponse {
-    status: u16,
-    body: String,
-}
-
-fn parse_search_results(body: &str) -> Vec<PluginEntry> {
-    let val: serde_json::Value = match serde_json::from_str(body) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut items = Vec::new();
-
-    if let Some(tracks) = val["tracks"]["items"].as_array() {
-        for track in tracks {
-            let id = track["id"].as_u64().unwrap_or(0).to_string();
-            let title = track["title"].as_str().unwrap_or("Unknown").to_string();
-            let artist = track["artist"]["name"].as_str().unwrap_or("");
-            let album = track["album"]["title"].as_str().unwrap_or("");
-            let duration = track["duration"].as_u64().unwrap_or(0);
-            let image = track["album"]["coverUrl"]
-                .as_str()
-                .or_else(|| track["album"]["cover"]["large"].as_str());
-
-            items.push(PluginEntry {
-                id,
-                title: if artist.is_empty() {
-                    title.clone()
-                } else {
-                    format!("{} — {}", title, artist)
-                },
-                year: Some(format_duration(duration)),
-                genre: None,
-                rating: None,
-                description: if album.is_empty() {
-                    None
-                } else {
-                    Some(album.to_string())
-                },
-                poster_url: image.map(String::from),
-                imdb_id: None,
-            });
-        }
-    }
-
-    items
-}
-
-fn parse_stream_url(body: &str) -> Option<String> {
-    let val: serde_json::Value = serde_json::from_str(body).ok()?;
-
-    if let Some(url) = val["url"].as_str() {
-        if !url.is_empty() {
-            return Some(url.to_string());
-        }
-    }
-
-    if let Some(url) = val["streamUrl"].as_str() {
-        if !url.is_empty() {
-            return Some(url.to_string());
-        }
-    }
-
-    None
-}
-
-fn format_duration(seconds: u64) -> String {
-    let mins = seconds / 60;
-    let secs = seconds % 60;
-    format!("{}:{:02}", mins, secs)
 }
 
 fn urlencoding(s: &str) -> String {
@@ -375,5 +446,31 @@ mod tests {
         assert_eq!(super::format_duration(0), "0:00");
         assert_eq!(super::format_duration(30), "0:30");
         assert_eq!(super::format_duration(90), "1:30");
+    }
+
+    #[test]
+    fn test_parse_stream_url_url_key() {
+        let body = r#"{"url":"https://example.com/stream.flac","mimeType":"audio/flac"}"#;
+        assert_eq!(
+            super::parse_stream_url(body),
+            Some("https://example.com/stream.flac".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_stream_url_fallback_key() {
+        let body = r#"{"streamUrl":"https://example.com/stream.flac"}"#;
+        assert_eq!(
+            super::parse_stream_url(body),
+            Some("https://example.com/stream.flac".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_search_results_skips_zero_id() {
+        // A track with id=0 (missing/invalid) must not appear in results.
+        let body = r#"{"tracks":{"items":[{"id":0,"title":"Bad","artist":{"name":""},"album":{"title":""},"duration":0}]}}"#;
+        let items = super::parse_search_results(body);
+        assert!(items.is_empty());
     }
 }

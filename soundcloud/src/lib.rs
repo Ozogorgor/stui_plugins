@@ -120,12 +120,11 @@ fn parse_ytdlp_search_results(output: &str) -> Vec<PluginEntry> {
             .and_then(|v| v.as_str())
             .map(String::from);
 
-        let duration = val["duration"].as_f64().unwrap_or(0.0);
-        let duration_str = if duration > 0.0 {
-            Some(format_duration(duration as u64))
-        } else {
-            None
-        };
+        // upload_date is "YYYYMMDD" — take the first 4 chars as year
+        let year = val["upload_date"]
+            .as_str()
+            .filter(|d| d.len() >= 4)
+            .map(|d| d[..4].to_string());
 
         let poster_url = val["thumbnail"].as_str().map(String::from).or_else(|| {
             val["thumbnails"]
@@ -139,12 +138,13 @@ fn parse_ytdlp_search_results(output: &str) -> Vec<PluginEntry> {
         items.push(PluginEntry {
             id,
             title,
-            year: duration_str,
+            year,
             genre,
             rating: None,
             description,
             poster_url,
             imdb_id: None,
+            duration: None,
         });
     }
 
@@ -152,31 +152,41 @@ fn parse_ytdlp_search_results(output: &str) -> Vec<PluginEntry> {
 }
 
 fn parse_ytdlp_resolve(output: &str) -> Option<String> {
-    // Try to parse as JSON (yt-dlp -j output)
     if let Ok(val) = serde_json::from_str::<serde_json::Value>(output) {
-        // Check for direct URL in various fields
+        // Top-level `url` is set when there is exactly one format — check first.
         if let Some(url) = val["url"].as_str() {
             if !url.is_empty() {
                 return Some(url.to_string());
             }
         }
-        if let Some(url) = val["direct"].as_str() {
-            if !url.is_empty() {
-                return Some(url.to_string());
-            }
-        }
-        // Return the original URL from webpage_url
-        if let Some(url) = val["webpage_url"].as_str() {
-            return Some(url.to_string());
-        }
-    }
 
-    // If JSON parsing fails, check for HLS URL in output
-    for line in output.lines() {
-        if line.starts_with("https://")
-            && (line.contains(".m3u8") || line.contains("acl:") || line.contains("mp3"))
-        {
-            return Some(line.trim().to_string());
+        // For multi-format outputs (SoundCloud typically has HLS + progressive),
+        // traverse `formats[]` and prefer progressive MP3 over HLS so MPD can
+        // play without needing HLS demuxer support.
+        if let Some(formats) = val["formats"].as_array() {
+            // Pass 1: progressive (http/https) audio-only
+            for fmt in formats.iter().rev() {
+                let protocol = fmt["protocol"].as_str().unwrap_or("");
+                let vcodec = fmt["vcodec"].as_str().unwrap_or("none");
+                if vcodec == "none" && matches!(protocol, "https" | "http") {
+                    if let Some(url) = fmt["url"].as_str() {
+                        if !url.is_empty() {
+                            return Some(url.to_string());
+                        }
+                    }
+                }
+            }
+            // Pass 2: any audio-only format (includes HLS)
+            for fmt in formats.iter().rev() {
+                let vcodec = fmt["vcodec"].as_str().unwrap_or("none");
+                if vcodec == "none" {
+                    if let Some(url) = fmt["url"].as_str() {
+                        if !url.is_empty() {
+                            return Some(url.to_string());
+                        }
+                    }
+                }
+            }
         }
     }
 

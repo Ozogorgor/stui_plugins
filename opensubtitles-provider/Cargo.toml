@@ -8,16 +8,7 @@ description = "stui plugin — subtitle search via OpenSubtitles.com REST API"
 crate-type = ["cdylib"]
 
 [dependencies]
-stui-plugin-sdk = { path = "../sdk" }
+stui-plugin-sdk = { path = "../../sdk" }
 serde            = { version = "1", features = ["derive"] }
 serde_json       = "1"
 
-[profile.release]
-opt-level     = "z"
-lto           = true
-codegen-units = 1
-strip         = true
-panic         = "abort"
-
-[profile.dev]
-panic = "abort"

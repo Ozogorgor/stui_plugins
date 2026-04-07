@@ -4,9 +4,10 @@
 [plugin]
 name        = "prowlarr-provider"
 version     = "0.1.0"
-type        = "stream-provider"
-entrypoint  = "plugin.wasm"
 description = "Search torrents via a local Prowlarr instance"
+author      = "stui"
+abi_version = 1
+type        = "stream-provider"  # provides torrent stream URLs
 tags        = ["streams", "movies", "tv", "anime", "music"]
 
 [env]
@@ -32,13 +33,9 @@ required  = true
 [permissions]
 # Prowlarr is typically on localhost — no external internet permission needed.
 # If your Prowlarr instance is remote, add its hostname here.
-network_hosts = ["localhost", "127.0.0.1", "::1"]
+network = ["localhost", "127.0.0.1", "::1"]
 
 [search]
 movie_categories  = "2000,2010,2020"
 series_categories = "5000,5040,5070"
 music_categories  = "3000,3010,3040"
-
-[meta]
-author  = "stui"
-license = "Apache-2.0"

@@ -1,18 +1,35 @@
 // Spotify plugin for stui
 //
-// Uses OAuth for authentication and Spotify Web API for search/playlists.
-// Audio streaming is handled by the runtime via Spotify Connect (librespot).
+// Uses OAuth PKCE with a public client_id for authentication.
+// Requires Spotify Premium.
 //
-// User needs Spotify Premium to stream audio.
+// Flow:
+// 1. Generate PKCE code_verifier + code_challenge
+// 2. Open browser for OAuth login at accounts.spotify.com
+//    redirect_uri MUST be http:// (not https://) for localhost — Spotify rejects https on 127.0.0.1
+// 3. Exchange auth code → access_token + refresh_token; store expires_at
+// 4. On subsequent calls: check expiry, refresh silently if stale
+// 5. search()  — Spotify Web API v1/search
+// 6. resolve() — returns spotify:track:{id} URI for runtime librespot/Connect playback
+//
+// NOTE: resolve() returns a spotify:track: URI, not an HTTP URL. Playback requires
+// MPD to be configured with a Spotify backend (e.g. mopidy-spotify or spotifyd) that
+// understands spotify:track: URIs. The runtime's mpd_bridge passes the URI to MPD as-is.
 
 use stui_plugin_sdk::{
     auth_allocate_port, auth_open_and_wait, cache_get, cache_set, http_post_form, plugin_info,
-    PluginEntry, PluginResult, PluginType, ResolveRequest, ResolveResponse, SearchRequest,
-    SearchResponse, StuiPlugin,
+    plugin_warn, PluginEntry, PluginResult, PluginType, ResolveRequest, ResolveResponse,
+    SearchRequest, SearchResponse, StuiPlugin,
 };
 
-const CLIENT_ID: &str = "515ab11b9e0447278653f43520eea7d9";
+/// Default client ID. Users can override with their own Spotify app's client ID
+/// via the `client_id` config entry, which protects against this ID being revoked.
+const DEFAULT_CLIENT_ID: &str = "515ab11b9e0447278653f43520eea7d9";
 const SCOPES: &str = "user-library-read streaming user-read-private";
+
+fn client_id() -> String {
+    cache_get("client_id").unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string())
+}
 
 #[derive(Default)]
 pub struct Spotify;
@@ -68,12 +85,9 @@ impl StuiPlugin for Spotify {
             return PluginResult::err("resolve_failed", "empty entry_id");
         }
 
-        // entry_id should be a Spotify track URI or URL
-        // We return it as-is - runtime will handle Spotify Connect playback
         let stream_url = if entry_id.starts_with("spotify:track:") {
             entry_id.to_string()
         } else if entry_id.contains("spotify.com/track/") {
-            // Convert URL to URI format
             if let Some(id) = extract_spotify_track_id(entry_id) {
                 format!("spotify:track:{}", id)
             } else {
@@ -91,93 +105,151 @@ impl StuiPlugin for Spotify {
     }
 }
 
+// ── Token types ───────────────────────────────────────────────────────────────
+
+/// Raw response from Spotify's token endpoint.
+#[derive(serde::Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: u64,
+}
+
+/// Persisted token — adds `expires_at` so we can check staleness,
+/// and `refresh_token` so we can renew without re-opening a browser.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedToken {
+    access_token: String,
+    refresh_token: String,
+    /// Unix timestamp (seconds) when the access token expires.
+    expires_at: u64,
+}
+
+fn build_cached_token(
+    tr: TokenResponse,
+    existing_refresh: Option<&str>,
+) -> Result<CachedToken, String> {
+    // Spotify only issues a new refresh_token on the initial exchange; refresh
+    // calls return the same token without a new one.  Fall back to the existing
+    // refresh_token so we never lose it.
+    let refresh_token = tr
+        .refresh_token
+        .or_else(|| existing_refresh.map(str::to_string))
+        .ok_or_else(|| "no refresh_token in token response".to_string())?;
+
+    Ok(CachedToken {
+        access_token: tr.access_token,
+        refresh_token,
+        // Subtract 60 s as a safety margin.
+        expires_at: unix_now() + tr.expires_in.saturating_sub(60),
+    })
+}
+
+// ── Authentication ────────────────────────────────────────────────────────────
+
 fn ensure_authenticated() -> Result<String, String> {
-    if let Some(result) = token_from_cache(cache_get("spotify_token")) {
-        return result;
+    if let Some(cached_json) = cache_get("spotify_token") {
+        if let Ok(token) = serde_json::from_str::<CachedToken>(&cached_json) {
+            if unix_now() < token.expires_at {
+                return Ok(token.access_token);
+            }
+            // Expired — attempt silent refresh.
+            plugin_info!("spotify: access token expired, refreshing");
+            match refresh_access_token(&token.refresh_token) {
+                Ok(new_token) => {
+                    let json = serde_json::to_string(&new_token).map_err(|e| e.to_string())?;
+                    cache_set("spotify_token", &json);
+                    return Ok(new_token.access_token);
+                }
+                Err(e) => {
+                    plugin_warn!("spotify: token refresh failed ({}), re-authenticating", e);
+                    // Fall through to full PKCE flow.
+                }
+            }
+        }
     }
 
-    let (code_verifier, code_challenge) = generate_pkce();
+    let (code_verifier, code_challenge) = generate_pkce()?;
     let port = auth_allocate_port()?;
     let auth_url = build_auth_url(port, &code_challenge);
 
-    plugin_info!("Opening Spotify auth URL");
+    plugin_info!("spotify: opening OAuth URL");
 
     let cb = auth_open_and_wait(&auth_url, 120_000)?;
-    // Pass both the dynamic port AND the verifier to match the exact redirect_uri
-    // used at authorization and to satisfy PKCE (Spotify requires PKCE for public clients).
-    let token_json = exchange_code(&cb.code, &code_verifier, port)?;
-    cache_set("spotify_token", &token_json);
+    let tr = exchange_code(&cb.code, &code_verifier, port)?;
+    let cached = build_cached_token(tr, None)?;
+    let json = serde_json::to_string(&cached).map_err(|e| e.to_string())?;
+    cache_set("spotify_token", &json);
 
-    parse_token(&token_json)
+    Ok(cached.access_token)
+}
+
+fn refresh_access_token(refresh_token: &str) -> Result<CachedToken, String> {
+    let cid = client_id();
+    let body = format!(
+        "grant_type=refresh_token&refresh_token={}&client_id={}",
+        urlencoding(refresh_token),
+        urlencoding(&cid)
+    );
+    let resp = http_post_form("https://accounts.spotify.com/api/token", &body)
+        .map_err(|e| format!("token refresh failed: {}", e))?;
+    let tr: TokenResponse =
+        serde_json::from_str(&resp).map_err(|e| format!("parse refresh response: {}", e))?;
+    // Spotify may not return a new refresh_token on refresh — keep the old one.
+    build_cached_token(tr, Some(refresh_token))
 }
 
 fn build_auth_url(port: u16, code_challenge: &str) -> String {
+    let cid = client_id();
+    // Spotify requires http:// (not https://) for 127.0.0.1 redirect URIs.
+    let scopes_encoded = SCOPES
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            ' ' => "%20".to_string(),
+            _ => format!("%{:02X}", c as u8),
+        })
+        .collect::<String>();
     format!(
-        "https://accounts.spotify.com/authorize?client_id={}&redirect_uri=https://127.0.0.1:{}/login&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256",
-        CLIENT_ID, port, SCOPES, code_challenge
+        "https://accounts.spotify.com/authorize?client_id={}&redirect_uri=http://127.0.0.1:{}/login&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256",
+        cid, port, scopes_encoded, code_challenge
     )
 }
 
-fn exchange_code(code: &str, code_verifier: &str, port: u16) -> Result<String, String> {
-    // redirect_uri MUST match the one used in the authorization request exactly.
-    let redirect_uri = format!("https://127.0.0.1:{}/login", port);
+fn exchange_code(code: &str, code_verifier: &str, port: u16) -> Result<TokenResponse, String> {
+    let cid = client_id();
+    // redirect_uri must exactly match the one sent in build_auth_url.
+    let redirect_uri = format!("http://127.0.0.1:{}/login", port);
     let body = format!(
         "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
-        code, redirect_uri, CLIENT_ID, code_verifier
+        urlencoding(code),
+        urlencoding(&redirect_uri),
+        urlencoding(&cid),
+        urlencoding(code_verifier)
     );
-    http_post_form("https://accounts.spotify.com/api/token", &body)
+    let resp = http_post_form("https://accounts.spotify.com/api/token", &body)
+        .map_err(|e| format!("token exchange failed: {}", e))?;
+    serde_json::from_str(&resp).map_err(|e| format!("parse token response: {}", e))
 }
 
-fn generate_pkce() -> (String, String) {
-    use sha2::{Digest, Sha256};
-
-    let mut verifier_bytes = [0u8; 32];
-    getrandom::getrandom(&mut verifier_bytes).unwrap_or_else(|_| {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let mut state = now.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        for b in verifier_bytes.iter_mut() {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            *b = (state >> 56) as u8;
-        }
-    });
-
-    let verifier = base64_url_encode(verifier_bytes.to_vec());
-    let hash = Sha256::digest(verifier.as_bytes());
-    let challenge = base64_url_encode(hash.to_vec());
-
-    (verifier, challenge)
-}
-
-fn token_from_cache(cached: Option<String>) -> Option<Result<String, String>> {
-    cached.map(|j| parse_token(&j))
-}
-
-fn parse_token(json: &str) -> Result<String, String> {
-    let val: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| format!("parse error: {e}"))?;
-
-    let access_token = val["access_token"]
-        .as_str()
-        .ok_or_else(|| "missing access_token".to_string())?;
-
-    Ok(access_token.to_string())
-}
+// ── HTTP helper ───────────────────────────────────────────────────────────────
 
 fn http_get_with_token(url: &str, token: &str) -> Result<String, String> {
-    let url_json = serde_json::to_string(url).unwrap_or_default();
-    let token = token.to_string();
-    let payload = format!(
-        "{{\"url\":{},\"body\":\"\",\"__stui_headers\":{{\"Authorization\":\"Bearer {}\"}}}}",
-        url_json, token
-    );
+    // Use serde_json::json! to guarantee valid JSON — no raw token injection.
+    let payload = serde_json::json!({
+        "url": url,
+        "body": "",
+        "__stui_headers": {
+            "Authorization": format!("Bearer {}", token),
+        }
+    })
+    .to_string();
 
     #[cfg(target_arch = "wasm32")]
     {
         extern "C" {
             fn stui_http_post(ptr: *const u8, len: i32) -> i64;
+            fn stui_free(ptr: i32, len: i32);
         }
         let packed = unsafe { stui_http_post(payload.as_ptr(), payload.len() as i32) };
         if packed == 0 {
@@ -185,10 +257,14 @@ fn http_get_with_token(url: &str, token: &str) -> Result<String, String> {
         }
         let ptr = ((packed >> 32) & 0xFFFFFFFF) as *const u8;
         let len = (packed & 0xFFFFFFFF) as usize;
-        let json = unsafe { std::str::from_utf8(std::slice::from_raw_parts(ptr, len)) }
-            .map_err(|e| e.to_string())?;
 
-        let resp: HttpResponse = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let json = unsafe { std::str::from_utf8(std::slice::from_raw_parts(ptr, len)) }
+            .map_err(|e| e.to_string())?
+            .to_string();
+
+        unsafe { stui_free(ptr as i32, len as i32) };
+
+        let resp: HttpResponse = serde_json::from_str(&json).map_err(|e| e.to_string())?;
         if resp.status >= 200 && resp.status < 300 {
             Ok(resp.body)
         } else {
@@ -197,16 +273,19 @@ fn http_get_with_token(url: &str, token: &str) -> Result<String, String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (url, token, payload);
+        drop(payload);
         Err("http_get_with_token only available in WASM context".into())
     }
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)] // only constructed inside #[cfg(target_arch = "wasm32")] blocks
 struct HttpResponse {
     status: u16,
     body: String,
 }
+
+// ── Parsers ───────────────────────────────────────────────────────────────────
 
 fn parse_search_results(body: &str) -> Vec<PluginEntry> {
     let val: serde_json::Value = match serde_json::from_str(body) {
@@ -230,15 +309,7 @@ fn parse_search_results(body: &str) -> Vec<PluginEntry> {
                 .unwrap_or("");
 
             let album = track["album"]["name"].as_str().unwrap_or("");
-
-            let title = if artist.is_empty() {
-                name.clone()
-            } else {
-                format!("{} — {}", name, artist)
-            };
-
             let duration_ms = track["duration_ms"].as_u64().unwrap_or(0);
-            let duration_str = format_duration_ms(duration_ms);
 
             let poster_url = track["album"]["images"]
                 .as_array()
@@ -248,31 +319,55 @@ fn parse_search_results(body: &str) -> Vec<PluginEntry> {
 
             Some(PluginEntry {
                 id: format!("spotify:track:{}", id),
-                title,
-                year: Some(duration_str),
+                title: if artist.is_empty() {
+                    name
+                } else {
+                    format!("{} — {}", name, artist)
+                },
+                year: None,
                 genre: None,
                 rating: None,
-                description: Some(album.to_string()),
+                description: if album.is_empty() {
+                    None
+                } else {
+                    Some(album.to_string())
+                },
                 poster_url,
                 imdb_id: None,
+                duration: Some(format_duration_ms(duration_ms)),
             })
         })
         .collect()
 }
 
 fn extract_spotify_track_id(url: &str) -> Option<String> {
-    // Handle URLs like https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT
     if let Some(pos) = url.find("track/") {
-        let rest = &url[pos + 6..]; // "track/" is 6 bytes
+        let rest = &url[pos + 6..];
         let id: String = rest
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
             .collect();
-        if !id.is_empty() && id.len() > 10 {
+        if id.len() > 10 {
             return Some(id);
         }
     }
     None
+}
+
+// ── PKCE ─────────────────────────────────────────────────────────────────────
+
+fn generate_pkce() -> Result<(String, String), String> {
+    use sha2::{Digest, Sha256};
+
+    let mut verifier_bytes = [0u8; 32];
+    getrandom::getrandom(&mut verifier_bytes)
+        .map_err(|e| format!("PKCE generation failed: {}", e))?;
+
+    let verifier = base64_url_encode(verifier_bytes.to_vec());
+    let hash = Sha256::digest(verifier.as_bytes());
+    let challenge = base64_url_encode(hash.to_vec());
+
+    Ok((verifier, challenge))
 }
 
 fn base64_url_encode(data: Vec<u8>) -> String {
@@ -281,9 +376,17 @@ fn base64_url_encode(data: Vec<u8>) -> String {
     let mut i = 0;
     while i < data.len() {
         let b0 = data[i] as usize;
-        let b1 = if i + 1 < data.len() { data[i + 1] as usize } else { 0 };
-        let b2 = if i + 2 < data.len() { data[i + 2] as usize } else { 0 };
-        result.push(ALPHABET[(b0 >> 2)] as char);
+        let b1 = if i + 1 < data.len() {
+            data[i + 1] as usize
+        } else {
+            0
+        };
+        let b2 = if i + 2 < data.len() {
+            data[i + 2] as usize
+        } else {
+            0
+        };
+        result.push(ALPHABET[b0 >> 2] as char);
         result.push(ALPHABET[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
         if i + 1 < data.len() {
             result.push(ALPHABET[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
@@ -296,11 +399,21 @@ fn base64_url_encode(data: Vec<u8>) -> String {
     result
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_else(|e| {
+            plugin_warn!("spotify: failed to get system time: {}", e);
+            0
+        })
+}
+
 fn format_duration_ms(ms: u64) -> String {
     let secs = ms / 1000;
-    let mins = secs / 60;
-    let remaining_secs = secs % 60;
-    format!("{}:{:02}", mins, remaining_secs)
+    format!("{}:{:02}", secs / 60, secs % 60)
 }
 
 fn urlencoding(s: &str) -> String {
@@ -341,11 +454,22 @@ stui_plugin_sdk::stui_export_plugin!(Spotify);
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_extract_spotify_track_id() {
         assert_eq!(
-            super::extract_spotify_track_id(
-                "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"
+            extract_spotify_track_id("https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"),
+            Some("4cOdK2wGLETKBW3PvgPWqT".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_spotify_track_id_with_query() {
+        // Query string after the ID must be stripped
+        assert_eq!(
+            extract_spotify_track_id(
+                "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=abc"
             ),
             Some("4cOdK2wGLETKBW3PvgPWqT".to_string())
         );
@@ -353,9 +477,44 @@ mod tests {
 
     #[test]
     fn test_format_duration_ms() {
-        assert_eq!(super::format_duration_ms(0), "0:00");
-        assert_eq!(super::format_duration_ms(30000), "0:30");
-        assert_eq!(super::format_duration_ms(180000), "3:00");
-        assert_eq!(super::format_duration_ms(214000), "3:34");
+        assert_eq!(format_duration_ms(0), "0:00");
+        assert_eq!(format_duration_ms(30000), "0:30");
+        assert_eq!(format_duration_ms(180000), "3:00");
+        assert_eq!(format_duration_ms(214000), "3:34");
+    }
+
+    #[test]
+    fn test_build_cached_token_uses_existing_refresh_when_none_returned() {
+        let tr = TokenResponse {
+            access_token: "new_access".to_string(),
+            refresh_token: None, // Spotify doesn't always return a new one on refresh
+            expires_in: 3600,
+        };
+        let cached = build_cached_token(tr, Some("old_refresh")).unwrap();
+        assert_eq!(cached.access_token, "new_access");
+        assert_eq!(cached.refresh_token, "old_refresh");
+    }
+
+    #[test]
+    fn test_build_cached_token_fails_without_any_refresh_token() {
+        let tr = TokenResponse {
+            access_token: "new_access".to_string(),
+            refresh_token: None,
+            expires_in: 3600,
+        };
+        assert!(build_cached_token(tr, None).is_err());
+    }
+
+    #[test]
+    fn test_redirect_uri_uses_http_not_https() {
+        let url = build_auth_url(8888, "challenge_abc");
+        assert!(
+            url.contains("http://127.0.0.1:8888/login"),
+            "redirect_uri must use http:// for Spotify localhost OAuth"
+        );
+        assert!(
+            !url.contains("https://127.0.0.1"),
+            "https:// on localhost is rejected by Spotify"
+        );
     }
 }

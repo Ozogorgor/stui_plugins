@@ -322,6 +322,7 @@ impl SubtitleItem {
             description: Some(a.url.clone()),
             poster_url: None,
             imdb_id,
+            duration: None,
         }
     }
 }
@@ -537,29 +538,6 @@ impl Config {
 fn env_or(var: &str, default: &str) -> String {
     let cache_key = format!("__env:{}", var);
     cache_get(&cache_key).unwrap_or_else(|| default.to_string())
-}
-
-fn url_encode(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => vec![c],
-            ' ' => vec!['+'],
-            c => {
-                let mut buf = [0u8; 4];
-                let bytes = c.encode_utf8(&mut buf);
-                bytes
-                    .bytes()
-                    .flat_map(|b| {
-                        vec![
-                            '%',
-                            char::from_digit((b >> 4) as u32, 16).unwrap_or('0'),
-                            char::from_digit((b & 0xf) as u32, 16).unwrap_or('0'),
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-            }
-        })
-        .collect()
 }
 
 // ── WASM exports ──────────────────────────────────────────────────────────────

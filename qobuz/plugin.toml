@@ -1,13 +1,35 @@
-[plugin]
-name        = "Qobuz"
-version     = "0.1.0"
-type        = "stream-provider"
-entrypoint  = "plugin.wasm"
+name = "Qobuz"
 description = "Stream Qobuz high-resolution audio with login credentials"
+version = "0.1.0"
+plugin_type = "provider"
 
-[permissions]
-network_hosts = ["play.qobuz.com", "www.qobuz.com", "open.qobuz.com"]
+[network]
+hosts = ["play.qobuz.com", "www.qobuz.com", "open.qobuz.com"]
 
-[meta]
-author  = "stui"
-license = "Apache-2.0"
+[[config]]
+key      = "qobuz_username"
+label    = "Qobuz Email"
+hint     = "The email address for your Qobuz account"
+required = true
+masked   = false
+
+[[config]]
+key      = "qobuz_password"
+label    = "Qobuz Password"
+hint     = "Your Qobuz account password"
+required = true
+masked   = true
+
+[[config]]
+key      = "qobuz_app_id"
+label    = "App ID (optional)"
+hint     = "Leave blank to auto-detect from play.qobuz.com. Set manually if auto-detect breaks."
+required = false
+masked   = false
+
+[[config]]
+key      = "qobuz_app_secret"
+label    = "App Secret (optional)"
+hint     = "Leave blank to auto-detect from play.qobuz.com. Set manually if auto-detect breaks."
+required = false
+masked   = true

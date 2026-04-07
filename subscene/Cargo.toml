@@ -1,8 +1,8 @@
 [package]
-name        = "prowlarr-provider"
+name        = "subscene"
 version     = "0.1.0"
 edition     = "2021"
-description = "stui plugin — searches Prowlarr for torrents"
+description = "stui plugin — subtitle search via Subscene"
 
 [lib]
 crate-type = ["cdylib"]
@@ -11,4 +11,5 @@ crate-type = ["cdylib"]
 stui-plugin-sdk = { path = "../../sdk" }
 serde            = { version = "1", features = ["derive"] }
 serde_json       = "1"
+reqwest          = { version = "0.12", features = ["json"], default-features = false }
 

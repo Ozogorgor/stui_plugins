@@ -1,13 +1,14 @@
-[plugin]
-name        = "Tidal"
-version     = "0.1.0"
-type        = "stream-provider"
-entrypoint  = "plugin.wasm"
+name = "Tidal"
 description = "Stream Tidal high-fidelity audio with OAuth"
+version = "0.1.0"
+plugin_type = "provider"
 
-[permissions]
-network_hosts = ["listen.tidal.com", "login.tidal.com", "api.tidal.com"]
+[network]
+hosts = ["listen.tidal.com", "login.tidal.com", "api.tidal.com"]
 
-[meta]
-author  = "stui"
-license = "Apache-2.0"
+[[config]]
+key     = "country"
+label   = "Country Code"
+hint    = "ISO 3166-1 alpha-2 country code (e.g. US, GB, DE). Required by the Tidal API."
+required = false
+default = "US"

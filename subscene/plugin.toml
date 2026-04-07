@@ -1,0 +1,20 @@
+# subscene — plugin manifest
+# Install at: ~/.stui/plugins/subscene/
+
+[plugin]
+name        = "subscene"
+version     = "0.1.0"
+description = "Subscene — subtitle search and download"
+author      = "stui"
+abi_version = 1
+type        = "subtitle-provider"
+tags        = ["subtitles", "movies", "tv", "anime"]
+
+[config]
+
+[permissions]
+network = true
+
+[capabilities]
+search = true
+resolve = true

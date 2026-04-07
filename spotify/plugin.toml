@@ -1,13 +1,14 @@
-[plugin]
-name        = "Spotify"
-version     = "0.1.0"
-type        = "stream-provider"
-entrypoint  = "plugin.wasm"
+name = "Spotify"
 description = "Stream Spotify using OAuth and Spotify Connect"
+version = "0.1.0"
+plugin_type = "provider"
 
-[permissions]
-network_hosts = ["accounts.spotify.com", "api.spotify.com"]
+[network]
+hosts = ["accounts.spotify.com", "api.spotify.com"]
 
-[meta]
-author  = "stui"
-license = "Apache-2.0"
+[[config]]
+key      = "client_id"
+label    = "Client ID (optional)"
+hint     = "Your own Spotify app client ID from developer.spotify.com. Leave blank to use the built-in ID."
+required = false
+masked   = false

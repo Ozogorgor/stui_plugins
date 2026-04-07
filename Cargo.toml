@@ -12,6 +12,9 @@ members = [
     "opensubtitles-provider",
     "example-provider",
     "example-resolver",
+    "kitsunekko",
+    "subscene",
+    "yify-subs",
 ]
 
 # torrentio-rpc is a Python plugin — not a Cargo member

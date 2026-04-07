@@ -44,9 +44,15 @@ use stui_plugin_sdk::prelude::*;
 pub struct ProwlarrProvider;
 
 impl StuiPlugin for ProwlarrProvider {
-    fn name(&self) -> &str { "prowlarr-provider" }
-    fn version(&self) -> &str { "0.1.0" }
-    fn plugin_type(&self) -> PluginType { PluginType::Provider }
+    fn name(&self) -> &str {
+        "prowlarr-provider"
+    }
+    fn version(&self) -> &str {
+        "0.1.0"
+    }
+    fn plugin_type(&self) -> PluginType {
+        PluginType::Provider
+    }
 
     fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse> {
         let cfg = match Config::load() {
@@ -56,10 +62,10 @@ impl StuiPlugin for ProwlarrProvider {
 
         // Choose Newznab categories based on tab
         let categories = match req.tab.as_str() {
-            "movies"  => "2000,2010,2020,2030",
-            "series"  => "5000,5020,5040,5070,5080",
-            "music"   => "3000,3010,3020,3040",
-            _         => "2000,5000",
+            "movies" => "2000,2010,2020,2030",
+            "series" => "5000,5020,5040,5070,5080",
+            "music" => "3000,3010,3020,3040",
+            _ => "2000,5000",
         };
 
         let query_enc = url_encode(&req.query);
@@ -113,11 +119,12 @@ impl StuiPlugin for ProwlarrProvider {
             return PluginResult::err("RESOLVE_ERROR", "no downloadUrl or infoHash");
         };
 
-        plugin_info!("prowlarr: resolve → {}", &stream_url[..stream_url.len().min(80)]);
+        let truncated: String = stream_url.chars().take(80).collect();
+        plugin_info!("prowlarr: resolve → {}", truncated);
 
         PluginResult::ok(ResolveResponse {
             stream_url,
-            quality: None,  // quality comes from the title string (e.g. "1080p")
+            quality: None, // quality comes from the title string (e.g. "1080p")
             subtitles: vec![],
         })
     }
@@ -129,27 +136,27 @@ impl StuiPlugin for ProwlarrProvider {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProwlarrResult {
-    title:        String,
+    title: String,
     #[serde(default)]
-    size:         u64,            // bytes
+    size: u64, // bytes
     #[serde(default)]
-    seeders:      i32,
+    seeders: i32,
     #[serde(default)]
-    leechers:     i32,
+    leechers: i32,
     #[serde(default)]
-    indexer:      String,
+    indexer: String,
     #[serde(default)]
-    protocol:     String,         // "torrent" | "usenet"
+    protocol: String, // "torrent" | "usenet"
     #[serde(default)]
-    download_url: String,         // direct .torrent URL (may be empty)
+    download_url: String, // direct .torrent URL (may be empty)
     #[serde(default)]
-    info_url:     String,         // tracker page
+    info_url: String, // tracker page
     #[serde(default)]
-    info_hash:    String,         // 40-char hex SHA1
+    info_hash: String, // 40-char hex SHA1
     #[serde(default)]
-    imdb_id:      Option<i64>,
+    imdb_id: Option<i64>,
     #[serde(default)]
-    tmdb_id:      Option<i64>,
+    tmdb_id: Option<i64>,
     // Category list is present but we don't need it for the entry
 }
 
@@ -161,7 +168,8 @@ impl ProwlarrResult {
         let size_str = humanize_bytes(self.size);
         let meta = format!(
             "{size_str}  ↑{} ↓{}  {indexer}",
-            self.seeders, self.leechers,
+            self.seeders,
+            self.leechers,
             indexer = self.indexer,
         );
 
@@ -173,16 +181,17 @@ impl ProwlarrResult {
 
         PluginEntry {
             id,
-            title:       self.title,
-            year:        None,         // Prowlarr doesn't always provide year
-            genre:       Some(meta),   // seeders/size packed into genre slot
-            rating:      quality,      // "1080p", "4K", etc.
+            title: self.title,
+            year: None,        // Prowlarr doesn't always provide year
+            genre: Some(meta), // seeders/size packed into genre slot
+            rating: quality,   // "1080p", "4K", etc.
             description: Some(format!(
                 "Protocol: {}  InfoURL: {}",
                 self.protocol, self.info_url
             )),
-            poster_url:  None,
+            poster_url: None,
             imdb_id,
+            duration: None,
         }
     }
 }
@@ -191,7 +200,7 @@ impl ProwlarrResult {
 
 struct Config {
     base_url: String,
-    api_key:  String,
+    api_key: String,
 }
 
 impl Config {
@@ -199,13 +208,12 @@ impl Config {
         // The host passes env vars from plugin.toml [env] section to the plugin
         // via the cache under the key "__env:VAR_NAME".
         let base_url = env_or("PROWLARR_URL", "http://localhost:9696");
-        let api_key  = env_or("PROWLARR_API_KEY", "");
+        let api_key = env_or("PROWLARR_API_KEY", "");
 
         if api_key.is_empty() {
-            return Err(
-                "PROWLARR_API_KEY is not set. \
-                 Add it to ~/.config/stui/config.toml or set the env var.".into()
-            );
+            return Err("PROWLARR_API_KEY is not set. \
+                 Add it to ~/.config/stui/config.toml or set the env var."
+                .into());
         }
 
         Ok(Config { base_url, api_key })
@@ -244,34 +252,11 @@ fn build_cat_params(cats: &str) -> String {
         .join("&")
 }
 
-/// Minimal percent-encoding for URL query values.
-fn url_encode(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9'
-            | '-' | '_' | '.' | '~' => vec![c],
-            ' ' => vec!['+'],
-            c => {
-                let mut buf = [0u8; 4];
-                let bytes = c.encode_utf8(&mut buf).as_bytes();
-                bytes.iter().flat_map(|&b| {
-                    let hi = (b >> 4) as char;
-                    let lo = (b & 0xf) as char;
-                    let hex = |n: u8| -> char {
-                        if n < 10 { (b'0' + n) as char } else { (b'a' + n - 10) as char }
-                    };
-                    vec!['%', hex(b >> 4), hex(b & 0xf)]
-                }).collect::<Vec<_>>()
-            }
-        })
-        .collect()
-}
-
 /// Split "infoHash|downloadUrl" packed ID.
 fn parse_entry_id(id: &str) -> (String, String) {
     if let Some(pos) = id.find('|') {
         let hash = id[..pos].to_string();
-        let url  = id[pos+1..].to_string();
+        let url = id[pos + 1..].to_string();
         (hash, url)
     } else {
         (id.to_string(), String::new())
@@ -281,13 +266,16 @@ fn parse_entry_id(id: &str) -> (String, String) {
 /// Try to extract a quality string from a release title.
 fn extract_quality(title: &str) -> Option<String> {
     let t = title.to_uppercase();
-    for tag in &["2160P", "4K", "UHD", "1080P", "720P", "480P", "BDREMUX", "BLURAY", "WEB-DL"] {
+    for tag in &[
+        "2160P", "4K", "UHD", "1080P", "720P", "480P", "BDREMUX", "BLURAY", "WEB-DL",
+    ] {
         if t.contains(tag) {
-            return Some(tag.to_lowercase()
-                .replace("p", "p")
-                .replace("bdremux", "BD Remux")
-                .replace("bluray", "Blu-ray")
-                .replace("web-dl", "WEB-DL"));
+            return Some(
+                tag.to_lowercase()
+                    .replace("bdremux", "BD Remux")
+                    .replace("bluray", "Blu-ray")
+                    .replace("web-dl", "WEB-DL"),
+            );
         }
     }
     None

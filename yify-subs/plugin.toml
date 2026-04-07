@@ -1,0 +1,20 @@
+# yify-subs — plugin manifest
+# Install at: ~/.stui/plugins/yify-subs/
+
+[plugin]
+name        = "yify-subs"
+version     = "0.1.0"
+description = "YIFY Subtitles — movie subtitles by IMDB ID"
+author      = "stui"
+abi_version = 1
+type        = "subtitle-provider"
+tags        = ["subtitles", "movies"]
+
+[config]
+
+[permissions]
+network = true
+
+[capabilities]
+search = true
+resolve = true

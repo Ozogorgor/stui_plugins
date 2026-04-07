@@ -75,6 +75,8 @@ pub struct PluginEntry {
     pub description: Option<String>,
     pub poster_url: Option<String>,
     pub imdb_id: Option<String>,
+    #[serde(default)]
+    pub duration: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +225,7 @@ pub fn http_get(url: &str) -> Result<String, String> {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)] // fields only read inside #[cfg(target_arch = "wasm32")] blocks
 struct HttpResponse {
     pub status: u16,
     pub body: String,
@@ -312,6 +315,24 @@ pub fn cache_set(key: &str, value: &str) {
             value.len()
         );
     }
+}
+
+/// Percent-encode a string for use in URLs (RFC 3986).
+/// Spaces are encoded as %20 (not +).
+pub fn url_encode(s: &str) -> String {
+    let mut encoded = String::new();
+    for c in s.chars() {
+        match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => encoded.push(c),
+            ' ' => encoded.push_str("%20"),
+            _ => {
+                for byte in c.to_string().as_bytes() {
+                    encoded.push_str(&format!("%{:02X}", byte));
+                }
+            }
+        }
+    }
+    encoded
 }
 
 // ── OAuth helpers ──────────────────────────────────────────────────────────
@@ -460,12 +481,13 @@ pub fn exec(cmd: &str, args: &[&str], timeout_ms: u32) -> Result<String, String>
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (cmd, args, timeout_ms);
+        let _ = (cmd, args, timeout_ms, payload);
         Err("exec only available in WASM context".into())
     }
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)] // fields only read inside #[cfg(target_arch = "wasm32")] blocks
 struct ExecResponse {
     status: i32,
     stdout: String,
@@ -582,6 +604,7 @@ pub mod prelude {
     pub use crate::http_get;
     pub use crate::http_post_json;
     pub use crate::stui_export_plugin;
+    pub use crate::url_encode;
     pub use crate::{plugin_debug, plugin_error, plugin_info, plugin_warn};
     pub use crate::{
         PluginEntry, PluginResult, PluginType, ResolveRequest, ResolveResponse, SearchRequest,
