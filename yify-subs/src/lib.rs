@@ -16,7 +16,30 @@
 //!   - Visit the subtitle page, extract download link
 
 use stui_plugin_sdk::prelude::*;
+use stui_plugin_sdk::{
+    parse_manifest, PluginManifest,
+    Plugin, CatalogPlugin,
+    EntryKind, SearchScope,
+};
 use url::Url;
+
+// ── Plugin struct ─────────────────────────────────────────────────────────────
+
+pub struct YifySubsProvider {
+    manifest: PluginManifest,
+}
+
+impl Default for YifySubsProvider {
+    fn default() -> Self {
+        Self {
+            manifest: parse_manifest(include_str!("../plugin.toml"))
+                .expect("plugin.toml failed to parse at compile time"),
+        }
+    }
+}
+
+const BASE_URL: &str = "https://yts-subs.com";
+const TRUSTED_DOMAINS: &[&str] = &["yts-subs.com", "yifysubtitles.org"];
 
 fn is_trusted_url(url_str: &str) -> bool {
     let Ok(url) = Url::parse(url_str) else {
@@ -31,7 +54,7 @@ fn is_trusted_url(url_str: &str) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
-    if host.contains('@') || host.contains('%40') {
+    if host.contains('@') || host.contains("%40") {
         return false;
     }
     let host_lower = host.to_lowercase();
@@ -40,35 +63,25 @@ fn is_trusted_url(url_str: &str) -> bool {
         .any(|d| host_lower == *d || host_lower == format!("www.{}", d))
 }
 
-const BASE_URL: &str = "https://yts-subs.com";
-const TRUSTED_DOMAINS: &[&str] = &["yts-subs.com", "yifysubtitles.org"];
-
-pub struct YifySubsProvider;
-
-impl YifySubsProvider {
-    pub fn new() -> Self {
-        Self
-    }
+impl Plugin for YifySubsProvider {
+    fn manifest(&self) -> &PluginManifest { &self.manifest }
+    // init/shutdown use default no-op impls from the trait
 }
 
-impl Default for YifySubsProvider {
-    fn default() -> Self {
-        Self
-    }
-}
-
-impl StuiPlugin for YifySubsProvider {
-    fn name(&self) -> &str {
-        "yify-subs"
-    }
-    fn version(&self) -> &str {
-        "0.1.0"
-    }
-    fn plugin_type(&self) -> PluginType {
-        PluginType::Subtitle
-    }
-
+impl CatalogPlugin for YifySubsProvider {
     fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse> {
+        // YIFY indexes movie releases only. Series/episode/music scopes are
+        // not supported — there is no TV/album surface on yts-subs.com.
+        let kind = match req.scope {
+            SearchScope::Movie => EntryKind::Movie,
+            _ => {
+                return PluginResult::err(
+                    "UNSUPPORTED_SCOPE",
+                    "yify-subs only indexes YIFY movie releases; series/episode/music scopes are not supported",
+                );
+            }
+        };
+
         let query = req.query.trim();
         if query.is_empty() {
             return PluginResult::ok(SearchResponse {
@@ -80,14 +93,36 @@ impl StuiPlugin for YifySubsProvider {
         plugin_info!("yify-subs: searching '{}'", query);
 
         let items = if is_imdb_id(query) {
-            search_by_imdb(query, req.limit)
+            search_by_imdb(query, req.limit, kind)
         } else {
-            search_by_title(query, req.limit)
+            search_by_title(query, req.limit, kind)
         };
 
         let total = items.len() as u32;
         plugin_info!("yify-subs: found {} results", total);
         PluginResult::ok(SearchResponse { items, total })
+    }
+
+    // lookup / enrich / get_artwork / get_credits / related use the default
+    // NOT_IMPLEMENTED returns from the trait — yify-subs is a subtitle
+    // scraper, not a metadata source.
+}
+
+// `StuiPlugin` is deprecated in favor of `Plugin + CatalogPlugin`, but
+// `stui_export_plugin!` still requires it for the `stui_resolve` ABI
+// export. This block goes away when the subtitle/stream ABIs land and
+// the macro drops its `$plugin_ty: StuiPlugin` bound.
+#[allow(deprecated)]
+impl StuiPlugin for YifySubsProvider {
+    fn name(&self) -> &str { &self.manifest.plugin.name }
+    fn version(&self) -> &str { &self.manifest.plugin.version }
+    fn plugin_type(&self) -> PluginType { PluginType::Subtitle }
+
+    // Never dispatched — stui_search routes through CatalogPlugin::search
+    // via the stui_export_plugin! macro. Kept as a trait stub so the
+    // macro's bound `$plugin_ty: StuiPlugin` is satisfied.
+    fn search(&self, _req: SearchRequest) -> PluginResult<SearchResponse> {
+        PluginResult::err("LEGACY_UNUSED", "search dispatches via CatalogPlugin")
     }
 
     fn resolve(&self, req: ResolveRequest) -> PluginResult<ResolveResponse> {
@@ -107,7 +142,7 @@ impl StuiPlugin for YifySubsProvider {
                 Ok(h) => h,
                 Err(e) => return PluginResult::err("HTTP_ERROR", &e),
             };
-            let entries = parse_movie_page(&movie_html, 1);
+            let entries = parse_movie_page(&movie_html, 1, EntryKind::Movie);
             match entries.into_iter().next() {
                 Some(e) => format!("{}/subtitles/{}", BASE_URL, e.id),
                 None => {
@@ -144,11 +179,13 @@ impl StuiPlugin for YifySubsProvider {
     }
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 fn is_imdb_id(s: &str) -> bool {
     s.starts_with("tt") && s.len() >= 5 && s[2..].chars().all(|c| c.is_ascii_digit())
 }
 
-fn search_by_imdb(imdb: &str, limit: u32) -> Vec<PluginEntry> {
+fn search_by_imdb(imdb: &str, limit: u32, kind: EntryKind) -> Vec<PluginEntry> {
     let url = format!("{}/movie-imdb/{}", BASE_URL, imdb);
     let html = match http_get(&url) {
         Ok(h) => h,
@@ -158,10 +195,10 @@ fn search_by_imdb(imdb: &str, limit: u32) -> Vec<PluginEntry> {
         }
     };
 
-    parse_movie_page(&html, limit)
+    parse_movie_page(&html, limit, kind)
 }
 
-fn search_by_title(query: &str, limit: u32) -> Vec<PluginEntry> {
+fn search_by_title(query: &str, limit: u32, kind: EntryKind) -> Vec<PluginEntry> {
     let encoded = url_encode(query);
     let url = format!("{}/browse?search={}", BASE_URL, encoded);
     let html = match http_get(&url) {
@@ -172,10 +209,10 @@ fn search_by_title(query: &str, limit: u32) -> Vec<PluginEntry> {
         }
     };
 
-    parse_browse_page(&html, limit)
+    parse_browse_page(&html, limit, kind)
 }
 
-fn parse_movie_page(html: &str, limit: u32) -> Vec<PluginEntry> {
+fn parse_movie_page(html: &str, limit: u32, kind: EntryKind) -> Vec<PluginEntry> {
     let mut entries = Vec::new();
 
     for line in html.lines() {
@@ -188,14 +225,10 @@ fn parse_movie_page(html: &str, limit: u32) -> Vec<PluginEntry> {
 
                     entries.push(PluginEntry {
                         id: slug,
+                        kind,
                         title,
-                        year: None,
-                        genre: None,
-                        rating: None,
                         description: Some(lang),
-                        poster_url: None,
-                        imdb_id: None,
-                        duration: None,
+                        ..Default::default()
                     });
 
                     if limit > 0 && entries.len() >= limit as usize {
@@ -209,7 +242,7 @@ fn parse_movie_page(html: &str, limit: u32) -> Vec<PluginEntry> {
     entries
 }
 
-fn parse_browse_page(html: &str, limit: u32) -> Vec<PluginEntry> {
+fn parse_browse_page(html: &str, limit: u32, kind: EntryKind) -> Vec<PluginEntry> {
     let mut entries = Vec::new();
 
     for line in html.lines() {
@@ -221,14 +254,10 @@ fn parse_browse_page(html: &str, limit: u32) -> Vec<PluginEntry> {
 
                 entries.push(PluginEntry {
                     id: format!("{}/movie-imdb/{}", BASE_URL, imdb),
+                    kind,
                     title,
-                    year: None,
-                    genre: None,
-                    rating: None,
-                    description: None,
-                    poster_url: None,
                     imdb_id: Some(imdb),
-                    duration: None,
+                    ..Default::default()
                 });
 
                 if limit > 0 && entries.len() >= limit as usize {

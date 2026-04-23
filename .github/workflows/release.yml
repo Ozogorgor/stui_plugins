@@ -37,6 +37,9 @@ jobs:
           - jackett-provider
           - prowlarr-provider
           - opensubtitles-provider
+          - kitsunekko
+          - subscene
+          - yify-subs
           # Streaming services stay commented — separate session.
           # - spotify
           # - tidal

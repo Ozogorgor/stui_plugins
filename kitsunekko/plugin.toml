@@ -1,23 +1,25 @@
 # kitsunekko — plugin manifest
-# Install at: ~/.stui/plugins/kitsunekko/
+# Anime subtitle scraper for kitsunekko.net
 
 [plugin]
 name        = "kitsunekko"
 version     = "0.1.0"
 abi_version = 1
-description = "Kitsunekko — Japanese and English anime subtitles"
-tags        = ["subtitles", "anime", "japanese"]
-
-[capabilities]
-search = true
-resolve = true
+description = "Anime subtitle scraper for kitsunekko.net"
+tags        = ["subtitles", "anime"]
 
 [capabilities.subtitles]
-
-[config]
+# Opaque capability — _extra HashMap catch-all. Runtime dispatch path:
+# engine::subtitles::fetch_subtitles → stui_search → stui_resolve.
 
 [permissions]
-network = true
+network = ["kitsunekko.net", "www.kitsunekko.net"]
+
+[rate_limit]
+requests_per_second = 1
+burst               = 3
 
 [meta]
-author = "stui"
+author   = "stui"
+license  = "MIT"
+homepage = "https://github.com/Ozogorgor/stui_plugins"

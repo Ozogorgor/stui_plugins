@@ -18,11 +18,26 @@
 //!   Parse HTML to extract .srt/.zip file links
 
 use stui_plugin_sdk::prelude::*;
+use stui_plugin_sdk::{
+    parse_manifest, PluginManifest,
+    Plugin, CatalogPlugin,
+    EntryKind, SearchScope,
+};
 
 // ── Plugin struct ─────────────────────────────────────────────────────────────
 
-#[derive(Default)]
-pub struct KitsunekkoProvider;
+pub struct KitsunekkoProvider {
+    manifest: PluginManifest,
+}
+
+impl Default for KitsunekkoProvider {
+    fn default() -> Self {
+        Self {
+            manifest: parse_manifest(include_str!("../plugin.toml"))
+                .expect("plugin.toml failed to parse at compile time"),
+        }
+    }
+}
 
 fn is_valid_kitsunekko_url(url: &str) -> bool {
     if let Some(rest) = url.strip_prefix("https://") {
@@ -35,18 +50,26 @@ fn is_valid_kitsunekko_url(url: &str) -> bool {
     false
 }
 
-impl StuiPlugin for KitsunekkoProvider {
-    fn name(&self) -> &str {
-        "kitsunekko"
-    }
-    fn version(&self) -> &str {
-        "0.1.0"
-    }
-    fn plugin_type(&self) -> PluginType {
-        PluginType::Subtitle
-    }
+impl Plugin for KitsunekkoProvider {
+    fn manifest(&self) -> &PluginManifest { &self.manifest }
+    // init/shutdown use default no-op impls from the trait
+}
 
+impl CatalogPlugin for KitsunekkoProvider {
     fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse> {
+        // Kitsunekko is anime-only. Movie/Series/Episode all fetch anime
+        // subtitles; Track/Artist/Album are nonsensical here.
+        let kind = match req.scope {
+            SearchScope::Series | SearchScope::Episode => EntryKind::Series,
+            SearchScope::Movie => EntryKind::Movie,
+            _ => {
+                return PluginResult::err(
+                    "UNSUPPORTED_SCOPE",
+                    "kitsunekko only supports movie and series/episode scopes",
+                );
+            }
+        };
+
         let query = req.query.trim();
         if query.is_empty() {
             return PluginResult::ok(SearchResponse {
@@ -67,11 +90,33 @@ impl StuiPlugin for KitsunekkoProvider {
             Err(e) => return PluginResult::err("HTTP_ERROR", &e),
         };
 
-        let items = parse_search_results(&html, req.limit);
+        let items = parse_search_results(&html, req.limit, kind);
         let total = items.len() as u32;
 
         plugin_info!("kitsunekko: found {} results", total);
         PluginResult::ok(SearchResponse { items, total })
+    }
+
+    // lookup / enrich / get_artwork / get_credits / related use the default
+    // NOT_IMPLEMENTED returns from the trait — kitsunekko is a subtitle
+    // scraper, not a metadata source.
+}
+
+// `StuiPlugin` is deprecated in favor of `Plugin + CatalogPlugin`, but
+// `stui_export_plugin!` still requires it for the `stui_resolve` ABI
+// export. This block goes away when the subtitle/stream ABIs land and
+// the macro drops its `$plugin_ty: StuiPlugin` bound.
+#[allow(deprecated)]
+impl StuiPlugin for KitsunekkoProvider {
+    fn name(&self) -> &str { &self.manifest.plugin.name }
+    fn version(&self) -> &str { &self.manifest.plugin.version }
+    fn plugin_type(&self) -> PluginType { PluginType::Subtitle }
+
+    // Never dispatched — stui_search routes through CatalogPlugin::search
+    // via the stui_export_plugin! macro. Kept as a trait stub so the
+    // macro's bound `$plugin_ty: StuiPlugin` is satisfied.
+    fn search(&self, _req: SearchRequest) -> PluginResult<SearchResponse> {
+        PluginResult::err("LEGACY_UNUSED", "search dispatches via CatalogPlugin")
     }
 
     fn resolve(&self, req: ResolveRequest) -> PluginResult<ResolveResponse> {
@@ -109,7 +154,7 @@ impl StuiPlugin for KitsunekkoProvider {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn parse_search_results(html: &str, limit: u32) -> Vec<PluginEntry> {
+fn parse_search_results(html: &str, limit: u32, kind: EntryKind) -> Vec<PluginEntry> {
     let mut entries = Vec::new();
 
     for line in html.lines() {
@@ -137,14 +182,12 @@ fn parse_search_results(html: &str, limit: u32) -> Vec<PluginEntry> {
 
                     entries.push(PluginEntry {
                         id: full_url,
+                        kind,
                         title: title.clone(),
-                        year: None,
-                        genre: None,
-                        rating: None,
+                        // Kitsunekko has no rating; the only extra meta is
+                        // the subtitle language, which goes into description.
                         description: Some(lang.to_string()),
-                        poster_url: None,
-                        imdb_id: None,
-                        duration: None,
+                        ..Default::default()
                     });
 
                     if limit > 0 && entries.len() >= limit as usize {

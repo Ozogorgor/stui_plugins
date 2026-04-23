@@ -16,11 +16,26 @@
 //!   Return the .zip URL - stui's aria2 will download it
 
 use stui_plugin_sdk::prelude::*;
+use stui_plugin_sdk::{
+    parse_manifest, PluginManifest,
+    Plugin, CatalogPlugin,
+    EntryKind, SearchScope,
+};
 
 // ── Plugin struct ─────────────────────────────────────────────────────────────
 
-#[derive(Default)]
-pub struct SubsceneProvider;
+pub struct SubsceneProvider {
+    manifest: PluginManifest,
+}
+
+impl Default for SubsceneProvider {
+    fn default() -> Self {
+        Self {
+            manifest: parse_manifest(include_str!("../plugin.toml"))
+                .expect("plugin.toml failed to parse at compile time"),
+        }
+    }
+}
 
 fn is_valid_subscene_url(url: &str) -> bool {
     if let Some(rest) = url.strip_prefix("https://") {
@@ -33,18 +48,26 @@ fn is_valid_subscene_url(url: &str) -> bool {
     false
 }
 
-impl StuiPlugin for SubsceneProvider {
-    fn name(&self) -> &str {
-        "subscene"
-    }
-    fn version(&self) -> &str {
-        "0.1.0"
-    }
-    fn plugin_type(&self) -> PluginType {
-        PluginType::Subtitle
-    }
+impl Plugin for SubsceneProvider {
+    fn manifest(&self) -> &PluginManifest { &self.manifest }
+    // init/shutdown use default no-op impls from the trait
+}
 
+impl CatalogPlugin for SubsceneProvider {
     fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse> {
+        // Subscene covers movies + series. Track/Artist/Album scopes are
+        // nonsensical here.
+        let kind = match req.scope {
+            SearchScope::Series | SearchScope::Episode => EntryKind::Series,
+            SearchScope::Movie => EntryKind::Movie,
+            _ => {
+                return PluginResult::err(
+                    "UNSUPPORTED_SCOPE",
+                    "subscene only supports movie and series/episode scopes",
+                );
+            }
+        };
+
         let query = req.query.trim();
         if query.is_empty() {
             return PluginResult::ok(SearchResponse {
@@ -65,11 +88,33 @@ impl StuiPlugin for SubsceneProvider {
             Err(e) => return PluginResult::err("HTTP_ERROR", &e),
         };
 
-        let items = parse_search_results(&html, req.limit);
+        let items = parse_search_results(&html, req.limit, kind);
         let total = items.len() as u32;
 
         plugin_info!("subscene: found {} results", total);
         PluginResult::ok(SearchResponse { items, total })
+    }
+
+    // lookup / enrich / get_artwork / get_credits / related use the default
+    // NOT_IMPLEMENTED returns from the trait — subscene is a subtitle
+    // scraper, not a metadata source.
+}
+
+// `StuiPlugin` is deprecated in favor of `Plugin + CatalogPlugin`, but
+// `stui_export_plugin!` still requires it for the `stui_resolve` ABI
+// export. This block goes away when the subtitle/stream ABIs land and
+// the macro drops its `$plugin_ty: StuiPlugin` bound.
+#[allow(deprecated)]
+impl StuiPlugin for SubsceneProvider {
+    fn name(&self) -> &str { &self.manifest.plugin.name }
+    fn version(&self) -> &str { &self.manifest.plugin.version }
+    fn plugin_type(&self) -> PluginType { PluginType::Subtitle }
+
+    // Never dispatched — stui_search routes through CatalogPlugin::search
+    // via the stui_export_plugin! macro. Kept as a trait stub so the
+    // macro's bound `$plugin_ty: StuiPlugin` is satisfied.
+    fn search(&self, _req: SearchRequest) -> PluginResult<SearchResponse> {
+        PluginResult::err("LEGACY_UNUSED", "search dispatches via CatalogPlugin")
     }
 
     fn resolve(&self, req: ResolveRequest) -> PluginResult<ResolveResponse> {
@@ -104,7 +149,7 @@ impl StuiPlugin for SubsceneProvider {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn parse_search_results(html: &str, limit: u32) -> Vec<PluginEntry> {
+fn parse_search_results(html: &str, limit: u32, kind: EntryKind) -> Vec<PluginEntry> {
     let mut entries = Vec::new();
 
     let mut in_tr = false;
@@ -172,18 +217,14 @@ fn parse_search_results(html: &str, limit: u32) -> Vec<PluginEntry> {
                 if !current_url.is_empty() && !current_title.is_empty() {
                     entries.push(PluginEntry {
                         id: current_url.clone(),
+                        kind,
                         title: current_title.clone(),
-                        year: None,
-                        genre: None,
-                        rating: None,
                         description: if current_lang.is_empty() {
                             None
                         } else {
                             Some(current_lang.clone())
                         },
-                        poster_url: None,
-                        imdb_id: None,
-                        duration: None,
+                        ..Default::default()
                     });
                 }
                 in_tr = false;

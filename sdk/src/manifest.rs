@@ -62,15 +62,14 @@ pub enum CatalogCapability {
 
 impl Default for CatalogCapability {
     fn default() -> Self {
-        Self::Typed {
-            kinds: Vec::new(),
-            search: None,
-            lookup: None,
-            enrich: None,
-            artwork: None,
-            credits: None,
-            related: None,
-        }
+        // Subtitle-only and stream-only plugins declare no
+        // [capabilities.catalog] block, so serde hits this default.
+        // Returning `Enabled(false)` is an explicit "no catalog capability"
+        // and skips the validator's typed-catalog branch (which requires
+        // `search: Some(true)` for the Typed variant). Plugins that DO
+        // declare a typed catalog block override this at deserialize time,
+        // so this change does not affect existing metadata plugins.
+        Self::Enabled(false)
     }
 }
 

@@ -1,23 +1,24 @@
 # yify-subs — plugin manifest
-# Install at: ~/.stui/plugins/yify-subs/
+# Subtitle scraper for YIFY movie releases
 
 [plugin]
 name        = "yify-subs"
 version     = "0.1.0"
 abi_version = 1
-description = "YIFY Subtitles — movie subtitles by IMDB ID"
+description = "Subtitle scraper for YIFY movie releases"
 tags        = ["subtitles", "movies"]
 
-[capabilities]
-search = true
-resolve = true
-
 [capabilities.subtitles]
-
-[config]
+# Opaque capability — _extra HashMap catch-all.
 
 [permissions]
-network = true
+network = ["yifysubtitles.ch", "www.yifysubtitles.ch", "yifysubtitles.com", "yts-subs.com", "yifysubtitles.org"]
+
+[rate_limit]
+requests_per_second = 1
+burst               = 3
 
 [meta]
-author = "stui"
+author   = "stui"
+license  = "MIT"
+homepage = "https://github.com/Ozogorgor/stui_plugins"

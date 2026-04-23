@@ -1,23 +1,24 @@
 # subscene — plugin manifest
-# Install at: ~/.stui/plugins/subscene/
+# Subtitle scraper for subscene.com
 
 [plugin]
 name        = "subscene"
 version     = "0.1.0"
 abi_version = 1
-description = "Subscene — subtitle search and download"
-tags        = ["subtitles", "movies", "tv", "anime"]
-
-[capabilities]
-search = true
-resolve = true
+description = "Subtitle scraper for subscene.com"
+tags        = ["subtitles", "movies", "tv"]
 
 [capabilities.subtitles]
-
-[config]
+# Opaque capability — _extra HashMap catch-all.
 
 [permissions]
-network = true
+network = ["subscene.com", "www.subscene.com"]
+
+[rate_limit]
+requests_per_second = 1
+burst               = 3
 
 [meta]
-author = "stui"
+author   = "stui"
+license  = "MIT"
+homepage = "https://github.com/Ozogorgor/stui_plugins"
