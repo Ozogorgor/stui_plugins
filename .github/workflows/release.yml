@@ -34,14 +34,15 @@ jobs:
         plugin:
           - example-provider
           - example-resolver
+          - jackett-provider
+          - prowlarr-provider
+          - opensubtitles-provider
+          # Streaming services stay commented — separate session.
           # - spotify
           # - tidal
           # - qobuz
           # - roon
           # - soundcloud
-          # - jackett-provider
-          # - prowlarr-provider
-          # - opensubtitles-provider
     steps:
       - uses: actions/checkout@v4
 

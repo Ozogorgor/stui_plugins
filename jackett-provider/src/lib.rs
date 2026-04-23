@@ -39,44 +39,55 @@
 
 use serde::Deserialize;
 use stui_plugin_sdk::prelude::*;
+use stui_plugin_sdk::{
+    parse_manifest, PluginManifest,
+    Plugin, CatalogPlugin,
+    EntryKind, SearchScope,
+};
 
 // ── Plugin struct ─────────────────────────────────────────────────────────────
 
-#[derive(Default)]
-pub struct JackettProvider;
+pub struct JackettProvider {
+    manifest: PluginManifest,
+}
 
-impl StuiPlugin for JackettProvider {
-    fn name(&self) -> &str {
-        "jackett-provider"
+impl Default for JackettProvider {
+    fn default() -> Self {
+        Self {
+            manifest: parse_manifest(include_str!("../plugin.toml"))
+                .expect("plugin.toml failed to parse at compile time"),
+        }
     }
-    fn version(&self) -> &str {
-        "0.1.0"
-    }
-    fn plugin_type(&self) -> PluginType {
-        PluginType::Provider
-    }
+}
 
+impl Plugin for JackettProvider {
+    fn manifest(&self) -> &PluginManifest { &self.manifest }
+    // init/shutdown use default no-op impls from the trait
+}
+
+impl CatalogPlugin for JackettProvider {
     fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse> {
         let cfg = match Config::load() {
             Ok(c) => c,
             Err(e) => return PluginResult::err("CONFIG_ERROR", &e),
         };
 
-        // Choose Newznab categories based on tab
-        let categories = match req.tab.as_str() {
-            "movies" => "2000,2010,2020,2030",
-            "series" => "5000,5020,5040,5070,5080",
-            "music" => "3000,3010,3020,3040",
-            _ => "2000,5000",
+        // Map the new SearchScope enum to Jackett's Newznab categories.
+        // Music scopes fan out to 3000-range categories even though our
+        // manifest advertises only movie/series kinds — if the runtime
+        // ever dispatches a music scope here (manual test, future support),
+        // do the right thing instead of silently returning movies.
+        let categories = match req.scope {
+            SearchScope::Movie => "2000,2010,2020,2030",
+            SearchScope::Series | SearchScope::Episode => "5000,5020,5040,5070,5080",
+            SearchScope::Track | SearchScope::Artist | SearchScope::Album => "3000,3010,3020,3040",
+            // _ unreachable — SearchScope only has 6 variants, covered.
         };
 
         let query_enc = url_encode(&req.query);
         let url = format!(
             "{}/api/v2.0/indexers/all/results?apikey={}&Query.SearchTerm={}&{}",
-            cfg.base_url,
-            cfg.api_key,
-            query_enc,
-            build_cat_params(categories),
+            cfg.base_url, cfg.api_key, query_enc, build_cat_params(categories),
         );
 
         plugin_info!("jackett: searching — {}", url);
@@ -96,20 +107,48 @@ impl StuiPlugin for JackettProvider {
 
         plugin_info!("jackett: {} results", envelope.results.len());
 
+        // Must align with the category match above — same SearchScope variants.
+        let kind = match req.scope {
+            SearchScope::Series | SearchScope::Episode => EntryKind::Series,
+            SearchScope::Track | SearchScope::Artist | SearchScope::Album => EntryKind::Track,
+            _ => EntryKind::Movie,
+        };
+
         let items: Vec<PluginEntry> = envelope
             .results
             .into_iter()
             .take(req.limit as usize)
-            .map(|r| r.into_entry())
+            .map(|r| r.into_entry(kind))
             .collect();
 
         let total = items.len() as u32;
         PluginResult::ok(SearchResponse { items, total })
     }
 
+    // lookup / enrich / get_artwork / get_credits / related use the default
+    // NOT_IMPLEMENTED returns from the trait — jackett is a torrent search
+    // plugin, not a metadata source.
+}
+
+// `StuiPlugin` is deprecated in favor of `Plugin + CatalogPlugin`, but
+// `stui_export_plugin!` still requires it for the `stui_resolve` ABI
+// export. This block goes away when the subtitle/stream ABIs land and
+// the macro drops its `$plugin_ty: StuiPlugin` bound.
+#[allow(deprecated)]
+impl StuiPlugin for JackettProvider {
+    fn name(&self) -> &str { &self.manifest.plugin.name }
+    fn version(&self) -> &str { &self.manifest.plugin.version }
+    fn plugin_type(&self) -> PluginType { PluginType::Provider }
+
+    // Never dispatched — stui_search routes through CatalogPlugin::search
+    // via the stui_export_plugin! macro. Kept as a trait stub so the
+    // macro's bound `$plugin_ty: StuiPlugin` is satisfied.
+    fn search(&self, _req: SearchRequest) -> PluginResult<SearchResponse> {
+        PluginResult::err("LEGACY_UNUSED", "search dispatches via CatalogPlugin")
+    }
+
     fn resolve(&self, req: ResolveRequest) -> PluginResult<ResolveResponse> {
         // The entry ID is "{info_hash}|{magnet_uri}|{link}" packed by into_entry().
-        // Prefer MagnetUri, then Link (.torrent download), then build magnet from hash.
         let (info_hash, magnet_uri, link) = parse_entry_id(&req.entry_id);
 
         let stream_url = if !magnet_uri.is_empty() {
@@ -127,7 +166,10 @@ impl StuiPlugin for JackettProvider {
 
         PluginResult::ok(ResolveResponse {
             stream_url,
-            quality: None, // quality comes from the title string (e.g. "1080p")
+            // Quality is already embedded in PluginEntry.description at
+            // search time (extracted from the release title); the resolver
+            // doesn't re-derive it.
+            quality: None,
             subtitles: vec![],
         })
     }
@@ -166,7 +208,7 @@ struct JackettResult {
 }
 
 impl JackettResult {
-    fn into_entry(self) -> PluginEntry {
+    fn into_entry(self, kind: EntryKind) -> PluginEntry {
         let quality = extract_quality(&self.title);
         let size_str = humanize_bytes(self.size);
         let leechers = (self.peers - self.seeders).max(0);
@@ -175,23 +217,32 @@ impl JackettResult {
             self.seeders, leechers, self.tracker,
         );
 
-        // Pack the three resolution handles into the ID so resolve() needs no
-        // second network call.  Delimiters: first '|' separates hash, second
-        // '|' separates magnet from link.  Fields may be empty strings.
+        // Pack the three resolution handles into the ID so resolve() needs
+        // no second network call. Delimiters: '|' separates hash, magnet,
+        // and link. Fields may be empty strings.
         let id = format!("{}|{}|{}", self.info_hash, self.magnet_uri, self.link);
 
         let imdb_id = self.imdb.filter(|&i| i > 0).map(|i| format!("tt{:07}", i));
 
+        // Put the non-numeric quality tag into description alongside the
+        // size/seeders/tracker meta — PluginEntry.rating is f32 and
+        // "1080p"/"4K" aren't ratings. Quality first so the row remains scannable.
+        let description = match quality {
+            Some(q) => Some(format!("{q} · {meta}")),
+            None => Some(meta),
+        };
+
         PluginEntry {
             id,
+            kind,
             title: self.title,
-            year: None,
-            genre: Some(meta), // seeders/size/tracker packed into genre slot
-            rating: quality,   // "1080p", "4K", etc.
-            description: None,
-            poster_url: None,
+            description,
             imdb_id,
-            duration: None,
+            // All other Option fields and new ones (artist_name, album_name,
+            // track_number, season, episode, original_language, genre,
+            // rating, year, poster_url, duration, external_ids) default
+            // to None/empty — jackett has no metadata beyond title + size.
+            ..Default::default()
         }
     }
 }

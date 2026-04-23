@@ -32,12 +32,14 @@
 //! ## Plugin role in stui
 //!
 //! This plugin acts as a "subtitle" plugin.  The stui runtime calls:
-//!   search(query=title, tab="subtitles")  → returns subtitle entries
-//!   resolve(entry_id=file_id)             → returns the subtitle download URL
+//!   search(query=title, scope=movie|series|episode)  → returns subtitle entries
+//!   resolve(entry_id=file_id)                        → returns the subtitle download URL
 //!
 //! The detail panel's STREAM VIA section will list this plugin.  When the
 //! user selects a subtitle entry, resolve() fires and stui hands the URL
-//! to aria2 to download to ~/.stui/subtitles/{imdb_id}/.
+//! to aria2 to download to ~/.stui/subtitles/{imdb_id}/.  Note that the
+//! returned `stream_url` is a subtitle file URL fed to aria2 as a download
+//! source — it is not a media stream that happens to have attached subtitles.
 //!
 //! ## Configuration
 //!
@@ -58,32 +60,58 @@
 
 use serde::{Deserialize, Serialize};
 use stui_plugin_sdk::prelude::*;
+use stui_plugin_sdk::{
+    parse_manifest, PluginManifest,
+    Plugin, CatalogPlugin,
+    EntryKind, SearchScope,
+};
 
 // ── Plugin struct ─────────────────────────────────────────────────────────────
 
-#[derive(Default)]
-pub struct OpenSubtitlesProvider;
+pub struct OpenSubtitlesProvider {
+    manifest: PluginManifest,
+}
 
-impl StuiPlugin for OpenSubtitlesProvider {
-    fn name(&self) -> &str {
-        "opensubtitles-provider"
+impl Default for OpenSubtitlesProvider {
+    fn default() -> Self {
+        Self {
+            manifest: parse_manifest(include_str!("../plugin.toml"))
+                .expect("plugin.toml failed to parse at compile time"),
+        }
     }
-    fn version(&self) -> &str {
-        "0.1.0"
-    }
-    fn plugin_type(&self) -> PluginType {
-        PluginType::Provider
-    }
+}
 
-    /// Search returns subtitle entries.
-    ///
-    /// The `req.query` field is used as title search text.
-    /// If the entry has an imdb_id (set via the detail panel's entry_id), we
-    /// prefer that for precision.
+impl Plugin for OpenSubtitlesProvider {
+    fn manifest(&self) -> &PluginManifest { &self.manifest }
+    // init/shutdown use default no-op impls from the trait
+}
+
+impl CatalogPlugin for OpenSubtitlesProvider {
     fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse> {
         let cfg = match Config::load() {
             Ok(c) => c,
             Err(e) => return PluginResult::err("CONFIG_ERROR", &e),
+        };
+
+        // OpenSubtitles only indexes movie/series/episode subtitles.  Unlike
+        // the torrent providers (jackett/prowlarr) which silently fan out
+        // music scopes to 3000-range categories, here a music scope is a
+        // genuine dispatch error — we cannot serve music subtitles.  Return
+        // an error instead of a silent fallback so the runtime surface the
+        // misconfiguration.
+        //
+        // The `type` query param narrows the API response to the right kind
+        // of feature.  Episode and Series both map to "episode" — the API
+        // doesn't distinguish series-wide vs episode-specific subtitle packs.
+        let type_param = match req.scope {
+            SearchScope::Series | SearchScope::Episode => "episode",
+            SearchScope::Movie => "movie",
+            _ => {
+                return PluginResult::err(
+                    "UNSUPPORTED_SCOPE",
+                    "opensubtitles only supports movie and series/episode scopes",
+                );
+            }
         };
 
         // Detect if query looks like an IMDB id  (tt\d+) or raw title
@@ -91,8 +119,8 @@ impl StuiPlugin for OpenSubtitlesProvider {
             let id_num = &req.query[2..]; // strip "tt" prefix
             (
                 format!(
-                    "https://{}/api/v1/subtitles?imdb_id={}&languages={}&per_page=20",
-                    cfg.base_url, id_num, cfg.language
+                    "https://{}/api/v1/subtitles?imdb_id={}&languages={}&type={}&per_page=20",
+                    cfg.base_url, id_num, cfg.language, type_param,
                 ),
                 format!("imdb:{}", req.query),
             )
@@ -100,8 +128,8 @@ impl StuiPlugin for OpenSubtitlesProvider {
             let q = url_encode(&req.query);
             (
                 format!(
-                    "https://{}/api/v1/subtitles?query={}&languages={}&per_page=20",
-                    cfg.base_url, q, cfg.language
+                    "https://{}/api/v1/subtitles?query={}&languages={}&type={}&per_page=20",
+                    cfg.base_url, q, cfg.language, type_param,
                 ),
                 format!("query:{}", req.query),
             )
@@ -124,20 +152,53 @@ impl StuiPlugin for OpenSubtitlesProvider {
 
         plugin_info!("opensubtitles: {} subtitles found", resp.total_count);
 
+        // Must align with the type_param match above — same SearchScope
+        // variants.  Music scopes errored out earlier, so only Movie /
+        // Series / Episode arms matter here.
+        let kind = match req.scope {
+            SearchScope::Series | SearchScope::Episode => EntryKind::Series,
+            _ => EntryKind::Movie,
+        };
+
         let items: Vec<PluginEntry> = resp
             .data
             .into_iter()
             .take(req.limit as usize)
-            .map(|s| s.into_entry())
+            .map(|s| s.into_entry(kind))
             .collect();
 
         let total = items.len() as u32;
         PluginResult::ok(SearchResponse { items, total })
     }
 
+    // lookup / enrich / get_artwork / get_credits / related use the default
+    // NOT_IMPLEMENTED returns from the trait — opensubtitles is a subtitle
+    // search plugin, not a metadata source.
+}
+
+// `StuiPlugin` is deprecated in favor of `Plugin + CatalogPlugin`, but
+// `stui_export_plugin!` still requires it for the `stui_resolve` ABI
+// export. This block goes away when the subtitle/stream ABIs land and
+// the macro drops its `$plugin_ty: StuiPlugin` bound.
+#[allow(deprecated)]
+impl StuiPlugin for OpenSubtitlesProvider {
+    fn name(&self) -> &str { &self.manifest.plugin.name }
+    fn version(&self) -> &str { &self.manifest.plugin.version }
+    fn plugin_type(&self) -> PluginType { PluginType::Subtitle }
+
+    // Never dispatched — stui_search routes through CatalogPlugin::search
+    // via the stui_export_plugin! macro. Kept as a trait stub so the
+    // macro's bound `$plugin_ty: StuiPlugin` is satisfied.
+    fn search(&self, _req: SearchRequest) -> PluginResult<SearchResponse> {
+        PluginResult::err("LEGACY_UNUSED", "search dispatches via CatalogPlugin")
+    }
+
     /// Resolve returns the direct download URL for a subtitle file.
     ///
-    /// `req.entry_id` is the OpenSubtitles `file_id` (integer, stored as string).
+    /// `req.entry_id` is the OpenSubtitles `file_id` (integer, stored as string,
+    /// optionally prefixed with `os:`). The returned `stream_url` IS a subtitle
+    /// file URL that stui feeds to aria2 as a download source — it is not a
+    /// media stream with attached subtitles. The `subtitles` vec stays empty.
     fn resolve(&self, req: ResolveRequest) -> PluginResult<ResolveResponse> {
         let cfg = match Config::load() {
             Ok(c) => c,
@@ -271,7 +332,7 @@ struct FeatureDetails {
 }
 
 impl SubtitleItem {
-    fn into_entry(self) -> PluginEntry {
+    fn into_entry(self, kind: EntryKind) -> PluginEntry {
         let a = &self.attributes;
         let file_id = a.files.first().map(|f| f.file_id).unwrap_or(0);
         let file_name = a
@@ -313,16 +374,27 @@ impl SubtitleItem {
         let imdb_id = a.feature_details.imdb_id.map(|i| format!("tt{:07}", i));
 
         PluginEntry {
-            // Entry ID is the file_id — resolve() uses it directly
+            // Entry ID is the file_id — resolve() uses it directly.  The
+            // "os:" prefix disambiguates from raw-integer IDs used by other
+            // plugins (TMDB / IMDB numeric IDs etc).
             id: format!("os:{}", file_id),
+            kind,
             title,
-            year: a.feature_details.year.map(|y| y.to_string()),
+            year: a.feature_details.year,
             genre: Some(a.language.clone()),
-            rating: Some(format!("{:.1}", a.ratings)),
+            // PluginEntry.rating is f32; opensubtitles already delivers a
+            // float rating, pass it through directly.
+            rating: Some(a.ratings),
+            // Preserve the existing description (the OpenSubtitles web URL
+            // for the subtitle listing) — the title already carries the
+            // language + release + flags + rating + download-count meta.
             description: Some(a.url.clone()),
-            poster_url: None,
             imdb_id,
-            duration: None,
+            // All other Option fields and new ones (artist_name, album_name,
+            // track_number, season, episode, original_language, poster_url,
+            // duration, external_ids) default to None/empty — opensubtitles
+            // surfaces no further metadata here.
+            ..Default::default()
         }
     }
 }
@@ -535,6 +607,8 @@ impl Config {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Resolve environment variables through the host cache mechanism.
+/// The runtime injects `__env:{VAR}` into the plugin cache from plugin.toml [env].
 fn env_or(var: &str, default: &str) -> String {
     let cache_key = format!("__env:{}", var);
     cache_get(&cache_key).unwrap_or_else(|| default.to_string())

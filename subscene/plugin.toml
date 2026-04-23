@@ -4,17 +4,20 @@
 [plugin]
 name        = "subscene"
 version     = "0.1.0"
-description = "Subscene — subtitle search and download"
-author      = "stui"
 abi_version = 1
-type        = "subtitle-provider"
+description = "Subscene — subtitle search and download"
 tags        = ["subtitles", "movies", "tv", "anime"]
+
+[capabilities]
+search = true
+resolve = true
+
+[capabilities.subtitles]
 
 [config]
 
 [permissions]
 network = true
 
-[capabilities]
-search = true
-resolve = true
+[meta]
+author = "stui"

@@ -4,17 +4,20 @@
 [plugin]
 name        = "kitsunekko"
 version     = "0.1.0"
-description = "Kitsunekko — Japanese and English anime subtitles"
-author      = "stui"
 abi_version = 1
-type        = "subtitle-provider"
+description = "Kitsunekko — Japanese and English anime subtitles"
 tags        = ["subtitles", "anime", "japanese"]
+
+[capabilities]
+search = true
+resolve = true
+
+[capabilities.subtitles]
 
 [config]
 
 [permissions]
 network = true
 
-[capabilities]
-search = true
-resolve = true
+[meta]
+author = "stui"

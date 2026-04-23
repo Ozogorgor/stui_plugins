@@ -4,17 +4,20 @@
 [plugin]
 name        = "yify-subs"
 version     = "0.1.0"
-description = "YIFY Subtitles — movie subtitles by IMDB ID"
-author      = "stui"
 abi_version = 1
-type        = "subtitle-provider"
+description = "YIFY Subtitles — movie subtitles by IMDB ID"
 tags        = ["subtitles", "movies"]
+
+[capabilities]
+search = true
+resolve = true
+
+[capabilities.subtitles]
 
 [config]
 
 [permissions]
 network = true
 
-[capabilities]
-search = true
-resolve = true
+[meta]
+author = "stui"

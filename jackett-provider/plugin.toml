@@ -1,20 +1,23 @@
 # jackett-provider — plugin manifest
-# Install at: ~/.stui/plugins/jackett-provider/plugin.toml
 
 [plugin]
 name        = "jackett-provider"
 version     = "0.1.0"
-description = "Search torrents via a local Jackett instance"
-author      = "stui"
 abi_version = 1
-type        = "stream-provider"  # provides torrent stream URLs
+description = "Search torrents via a local Jackett instance"
 tags        = ["streams", "movies", "tv", "anime", "music"]
 
-[env]
-JACKETT_URL     = "http://localhost:9117"    # your Jackett base URL
-JACKETT_API_KEY = ""                         # Jackett → Dashboard → API Key
+[capabilities]
+streams = true
 
-[config]
+[capabilities.catalog]
+kinds  = ["movie", "series"]
+search = true
+
+[env]
+JACKETT_URL     = "http://localhost:9117"
+JACKETT_API_KEY = ""
+
 [[config]]
 key       = "url"
 label     = "Jackett URL"
@@ -39,3 +42,8 @@ network = ["localhost", "127.0.0.1", "::1"]
 movie_categories  = "2000,2010,2020"
 series_categories = "5000,5040,5070"
 music_categories  = "3000,3010,3040"
+
+[meta]
+author   = "stui"
+license  = "MIT"
+homepage = "https://github.com/Ozogorgor/stui_plugins"
