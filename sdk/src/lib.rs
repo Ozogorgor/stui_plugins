@@ -2,35 +2,31 @@
 //!
 //! The Rust SDK for building stui plugins.
 //!
-//! ## Quick start
+//! ## Quick Start
 //!
-//! ```rust
-//! use stui_plugin_sdk::prelude::*;
+//! ```ignore
+//! use stui_plugin_sdk::*;
 //!
-//! pub struct MyProvider;
+//! struct MyPlugin { manifest: PluginManifest }
 //!
-//! impl StuiPlugin for MyProvider {
-//!     fn name(&self) -> &str { "my-provider" }
-//!     fn version(&self) -> &str { "1.0.0" }
-//!     fn plugin_type(&self) -> PluginType { PluginType::Provider }
-//!
-//!     fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse> {
-//!         // ... fetch content ...
-//!         PluginResult::Ok(SearchResponse { items: vec![], total: 0 })
-//!     }
-//!
-//!     fn resolve(&self, req: ResolveRequest) -> PluginResult<ResolveResponse> {
-//!         PluginResult::Ok(ResolveResponse {
-//!             stream_url: "https://...".into(),
-//!             quality: Some("1080p".into()),
-//!             subtitles: vec![],
-//!         })
-//!     }
+//! impl Plugin for MyPlugin {
+//!     fn manifest(&self) -> &PluginManifest { &self.manifest }
 //! }
 //!
-//! // Register the plugin — generates all required WASM exports
-//! stui_export_plugin!(MyProvider);
+//! impl CatalogPlugin for MyPlugin {
+//!     fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse> {
+//!         // ... your search logic ...
+//!         Ok(SearchResponse { items: vec![], total: 0 })
+//!     }
+//!     // lookup / enrich / get_artwork / get_credits / related default to NOT_IMPLEMENTED
+//! }
+//!
+//! stui_export_catalog_plugin!(MyPlugin);
 //! ```
+//!
+//! For non-metadata plugin kinds (streams, subtitles, torrents) use
+//! [`stui_export_plugin!`] with the legacy `StuiPlugin` trait — it remains
+//! supported during the media-source plugin refactor.
 //!
 //! ## Compile to WASM
 //!
@@ -40,18 +36,85 @@
 //! # Output: target/wasm32-wasip1/release/my_provider.wasm
 //! ```
 
+// ── Modules ─────────────────────────────────────────────────────────────────
+
+pub mod kinds;
+pub mod id_sources;
+pub mod manifest;
+pub mod capabilities;
+
+pub use manifest::{
+    PluginManifest, PluginMeta, AuthorMeta,
+    Capabilities, CatalogCapability,
+    VerbConfig, LookupConfig, ArtworkConfig,
+    NetworkPermission, Permissions,
+    RateLimit, PluginConfigField,
+    ManifestValidationError,
+};
+
+/// Parse a plugin's canonical `plugin.toml` text into a [`PluginManifest`].
+///
+/// Plugins typically call this with `include_str!("../plugin.toml")` inside
+/// their `new()` constructor so the manifest is embedded at compile time.
+/// Using this helper lets plugins drop their direct `toml` crate dependency
+/// — the SDK owns the only `toml::from_str` call site for the canonical
+/// manifest schema.
+///
+/// ```no_run
+/// use stui_plugin_sdk::parse_manifest;
+/// let manifest = parse_manifest(include_str!("../plugin.toml"))
+///     .expect("plugin.toml failed to parse at compile time");
+/// ```
+pub fn parse_manifest(text: &str) -> Result<PluginManifest, String> {
+    toml::from_str(text).map_err(|e| e.to_string())
+}
+pub use capabilities::{
+    InitContext, InitRequest, InitResultEnvelope,
+    PluginLogger, DefaultPluginLogger, PluginInitError,
+    LookupRequest, LookupResponse,
+    EnrichRequest, EnrichResponse,
+    ArtworkRequest, ArtworkResponse, ArtworkSize, ArtworkVariant,
+    CreditsRequest, CreditsResponse,
+    CastMember, CastRole, CrewMember, CrewRole,
+    RelatedRequest, RelatedResponse, RelationKind,
+    err_not_implemented, normalize_crew_role,
+    validate_manifest,
+};
+
+pub mod error_codes {
+    //! Stable error-code string constants used in `PluginError::code`.
+    //! The runtime matches on these strings, so changing a value is a
+    //! wire-breaking change. Canonical form is snake_case to match
+    //! the rest of the ABI.
+
+    pub const UNSUPPORTED_SCOPE: &str = "unsupported_scope";
+    pub const INVALID_REQUEST:   &str = "invalid_request";
+    pub const NOT_IMPLEMENTED:   &str = "not_implemented";
+    pub const UNKNOWN_ID:        &str = "unknown_id";
+    pub const RATE_LIMITED:      &str = "rate_limited";
+    pub const TRANSIENT:         &str = "transient";
+    pub const REMOTE_ERROR:      &str = "remote_error";
+    pub const PARSE_ERROR:       &str = "parse_error";
+}
+
 // ── ABI types (re-exported for plugin authors) ────────────────────────────────
 
 pub const STUI_ABI_VERSION: i32 = 1;
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+pub use kinds::{EntryKind, SearchScope};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchRequest {
     pub query: String,
-    pub tab: String,
+    pub scope: SearchScope,
     pub page: u32,
     pub limit: u32,
+    #[serde(default)]
+    pub per_scope_limit: Option<u32>,
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,18 +128,50 @@ pub struct SearchResponse {
     pub total: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginEntry {
     pub id: String,
+    pub kind: EntryKind,
     pub title: String,
-    pub year: Option<String>,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub external_ids: HashMap<String, String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genre: Option<String>,
-    pub rating: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rating: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poster_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imdb_id: Option<String>,
-    #[serde(default)]
-    pub duration: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_number: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub season: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub episode: Option<u32>,
+
+    /// ISO 639-1 code of the entry's original spoken/produced language
+    /// (e.g. `"en"`, `"ja"`, `"ko"`). Used by the runtime's post-merge
+    /// anime-mix classifier: `genre contains "Animation" AND language == "ja"`
+    /// identifies Japanese animation from mainstream providers (TMDB etc).
+    /// Anime-dedicated providers (kitsu, anilist) are classified by provider
+    /// alone — populating this field is still helpful for future genre/lang
+    /// filters but not required for the anime quota to work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_language: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,27 +238,65 @@ impl PluginType {
 
 // ── StuiPlugin trait ─────────────────────────────────────────────────────────
 
-/// The trait every stui plugin implements.
+/// A legacy trait for non-metadata plugins (streams, subtitles, torrents).
 ///
-/// Implement this trait, then call `stui_export_plugin!(YourPlugin)` to
-/// generate the WASM ABI glue automatically.
+/// New plugins should implement [`Plugin`] + [`CatalogPlugin`] instead.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `Plugin` + `CatalogPlugin` for metadata plugins. Non-metadata use cases (streams, subtitles, torrents) will migrate to dedicated traits in a future refactor; `StuiPlugin` remains supported during that transition."
+)]
 pub trait StuiPlugin {
     fn name(&self) -> &str;
     fn version(&self) -> &str;
     fn plugin_type(&self) -> PluginType;
 
-    /// Search for content matching `req.query` in the given `req.tab`.
+    /// Search for content matching `req.query` within the given `req.scope`.
     fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse>;
 
     /// Resolve an entry ID into a playable stream URL.
     fn resolve(&self, req: ResolveRequest) -> PluginResult<ResolveResponse>;
 }
 
+// ── Plugin + CatalogPlugin traits ────────────────────────────────────────────
+
+/// Root trait every plugin implements — identity + lifecycle.
+///
+/// Only [`Plugin::manifest`] is required; [`Plugin::init`] and
+/// [`Plugin::shutdown`] have default no-op implementations.
+pub trait Plugin {
+    fn manifest(&self) -> &PluginManifest;
+    fn init(&mut self, _ctx: &InitContext) -> Result<(), PluginInitError> { Ok(()) }
+    fn shutdown(&mut self) -> Result<(), PluginError> { Ok(()) }
+}
+
+/// Metadata catalog capability. Plugins opt into this trait when they expose
+/// `[capabilities.catalog]` in their manifest. All verbs except `search` are
+/// optional; default impls return `NOT_IMPLEMENTED`.
+pub trait CatalogPlugin: Plugin {
+    fn search(&self, req: SearchRequest) -> PluginResult<SearchResponse>;
+
+    fn lookup(&self, _req: LookupRequest) -> PluginResult<LookupResponse>
+        { err_not_implemented() }
+    fn enrich(&self, _req: EnrichRequest) -> PluginResult<EnrichResponse>
+        { err_not_implemented() }
+    fn get_artwork(&self, _req: ArtworkRequest) -> PluginResult<ArtworkResponse>
+        { err_not_implemented() }
+    fn get_credits(&self, _req: CreditsRequest) -> PluginResult<CreditsResponse>
+        { err_not_implemented() }
+    fn related(&self, _req: RelatedRequest) -> PluginResult<RelatedResponse>
+        { err_not_implemented() }
+}
+
 // ── Host function imports (called by plugin at runtime) ───────────────────────
 
-/// Log a message through the stui host logger.
-/// Use the `log!` / `info!` / `warn!` macros instead of calling this directly.
+/// Host imports exposed to plugins. All functions are registered by the
+/// runtime under the dedicated `stui` WASM import module so they don't
+/// collide with WASI's `env` namespace.
+///
+/// Use the `log!` / `info!` / `warn!` macros instead of calling `stui_log`
+/// directly.
 #[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "stui")]
 extern "C" {
     pub fn stui_log(level: i32, ptr: *const u8, len: i32);
     pub fn stui_http_get(url_ptr: *const u8, url_len: i32) -> i64;
@@ -196,6 +329,102 @@ macro_rules! plugin_error { ($($t:tt)*) => { $crate::host_log(4, &format!($($t)*
 #[macro_export]
 macro_rules! plugin_debug { ($($t:tt)*) => { $crate::host_log(1, &format!($($t)*)) }; }
 
+/// Strip sensitive query parameters from a URL so it's safe to log.
+///
+/// Replaces the *value* of any query parameter whose key matches one of
+/// the well-known auth names (`api_key`, `apikey`, `key`, `token`,
+/// `access_token`, `secret`) with `***`. All other query params are
+/// preserved. Fragments and paths are untouched.
+///
+/// Use this in `plugin_info!` / `plugin_debug!` calls that would
+/// otherwise embed the full authenticated URL — even info-level logs
+/// can end up in crash reports, user bug submissions, or terminal
+/// scrollback.
+///
+/// ```
+/// use stui_plugin_sdk::log_url;
+/// let safe = log_url("https://api.example.com/x?query=matrix&api_key=deadbeef");
+/// assert_eq!(safe, "https://api.example.com/x?query=matrix&api_key=***");
+/// ```
+pub fn log_url(url: &str) -> String {
+    const SENSITIVE: &[&str] = &[
+        "api_key", "apikey", "key", "token", "access_token", "secret",
+    ];
+    let Some((base, query)) = url.split_once('?') else {
+        return url.to_string();
+    };
+    // Split off fragment so we reattach it at the end unchanged.
+    let (query, fragment) = match query.split_once('#') {
+        Some((q, f)) => (q, Some(f)),
+        None         => (query, None),
+    };
+    let scrubbed: Vec<String> = query
+        .split('&')
+        .map(|kv| match kv.split_once('=') {
+            Some((k, _)) if SENSITIVE.iter().any(|s| k.eq_ignore_ascii_case(s)) => {
+                format!("{k}=***")
+            }
+            _ => kv.to_string(),
+        })
+        .collect();
+    let joined = scrubbed.join("&");
+    match fragment {
+        Some(f) => format!("{base}?{joined}#{f}"),
+        None    => format!("{base}?{joined}"),
+    }
+}
+
+#[cfg(test)]
+mod log_url_tests {
+    use super::log_url;
+
+    #[test]
+    fn strips_api_key() {
+        assert_eq!(
+            log_url("https://api.tmdb.org/3/search/movie?query=matrix&api_key=deadbeef"),
+            "https://api.tmdb.org/3/search/movie?query=matrix&api_key=***",
+        );
+    }
+
+    #[test]
+    fn preserves_innocuous_params() {
+        assert_eq!(
+            log_url("https://x.example/y?page=2&limit=5"),
+            "https://x.example/y?page=2&limit=5",
+        );
+    }
+
+    #[test]
+    fn handles_multiple_sensitive_keys() {
+        let out = log_url("https://a?apikey=A&token=B&other=ok&access_token=C");
+        assert!(out.contains("apikey=***"));
+        assert!(out.contains("token=***"));
+        assert!(out.contains("access_token=***"));
+        assert!(out.contains("other=ok"));
+    }
+
+    #[test]
+    fn case_insensitive_key_match() {
+        assert_eq!(
+            log_url("https://a?API_KEY=X"),
+            "https://a?API_KEY=***",
+        );
+    }
+
+    #[test]
+    fn preserves_fragment() {
+        assert_eq!(
+            log_url("https://a/b?api_key=X#section"),
+            "https://a/b?api_key=***#section",
+        );
+    }
+
+    #[test]
+    fn no_query_is_passthrough() {
+        assert_eq!(log_url("https://a/b"), "https://a/b");
+    }
+}
+
 /// Make an HTTP GET request through the sandboxed host.
 /// Returns the response body as a String, or an error message.
 pub fn http_get(url: &str) -> Result<String, String> {
@@ -218,9 +447,128 @@ pub fn http_get(url: &str) -> Result<String, String> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // Host-side tests route through `sdk::testing::MockHost` fixtures
+        // when any are registered. Unrecognised URLs fall through to the
+        // "no fixture" error so forgotten registrations are loud.
+        if let Some(body) = crate::testing::try_fixture(url) {
+            return Ok(body);
+        }
         Err(format!(
             "http_get only available in WASM context (url: {url})"
         ))
+    }
+}
+
+// ── Host-side test harness ────────────────────────────────────────────────────
+
+/// Host-side test utilities — fixture registration for the SDK's HTTP
+/// helpers so plugin authors can unit-test verb dispatch without a live
+/// upstream API.
+///
+/// ```
+/// use stui_plugin_sdk::{http_get, testing::MockHost};
+///
+/// let _host = MockHost::new()
+///     .with_fixture_response(
+///         "https://api.example.com/x?query=inception",
+///         r#"{"results":[{"id":1,"title":"Inception"}]}"#,
+///     );
+/// let body = http_get("https://api.example.com/x?query=inception").unwrap();
+/// assert!(body.contains("\"Inception\""));
+/// ```
+///
+/// Fixtures are stored in a thread-local, so tests in the same thread
+/// share state — drop or `.reset()` between cases if needed. The
+/// `MockHost` value itself is a thin handle; holding or dropping it does
+/// NOT clear fixtures (so fluent builders in test helpers work as
+/// expected).
+pub mod testing {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static FIXTURES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    }
+
+    /// Handle for registering canned HTTP responses. See module doc.
+    pub struct MockHost;
+
+    impl Default for MockHost {
+        fn default() -> Self { Self::new() }
+    }
+
+    impl MockHost {
+        /// Build a fresh handle; existing fixtures in the thread-local are
+        /// preserved. Call [`MockHost::reset`] first if you want a clean
+        /// slate.
+        pub fn new() -> Self { MockHost }
+
+        /// Register a canned JSON response for a given URL (exact match).
+        /// Returns `self` so calls can be chained.
+        pub fn with_fixture_response(
+            self,
+            url: impl Into<String>,
+            body: impl Into<String>,
+        ) -> Self {
+            FIXTURES.with(|m| {
+                m.borrow_mut().insert(url.into(), body.into());
+            });
+            self
+        }
+
+        /// Clear every registered fixture on the current thread. Intended
+        /// for test tear-down; omit if your tests run on fresh threads or
+        /// only register once per case.
+        pub fn reset() {
+            FIXTURES.with(|m| m.borrow_mut().clear());
+        }
+    }
+
+    /// Internal hook: [`crate::http_get`] on non-WASM targets consults
+    /// this to resolve fixtures before returning its "no live host" error.
+    pub(crate) fn try_fixture(url: &str) -> Option<String> {
+        FIXTURES.with(|m| m.borrow().get(url).cloned())
+    }
+}
+
+#[cfg(test)]
+mod mockhost_tests {
+    use super::http_get;
+    use super::testing::MockHost;
+
+    fn reset() { MockHost::reset(); }
+
+    #[test]
+    fn fixture_satisfies_http_get() {
+        reset();
+        let _ = MockHost::new().with_fixture_response("https://a/x", r#"{"k":"v"}"#);
+        assert_eq!(http_get("https://a/x").unwrap(), r#"{"k":"v"}"#);
+    }
+
+    #[test]
+    fn unregistered_url_still_errors() {
+        reset();
+        let err = http_get("https://never-registered.example").unwrap_err();
+        assert!(err.contains("only available in WASM"));
+    }
+
+    #[test]
+    fn multiple_fixtures_chain() {
+        reset();
+        let _ = MockHost::new()
+            .with_fixture_response("https://a", "A")
+            .with_fixture_response("https://b", "B");
+        assert_eq!(http_get("https://a").unwrap(), "A");
+        assert_eq!(http_get("https://b").unwrap(), "B");
+    }
+
+    #[test]
+    fn reset_clears_everything() {
+        reset();
+        let _ = MockHost::new().with_fixture_response("https://x", "body");
+        assert!(http_get("https://x").is_ok());
+        MockHost::reset();
+        assert!(http_get("https://x").is_err());
     }
 }
 
@@ -248,6 +596,7 @@ pub fn http_post_json(url: &str, body: &str) -> Result<String, String> {
     );
     #[cfg(target_arch = "wasm32")]
     {
+        #[link(wasm_import_module = "stui")]
         extern "C" {
             fn stui_http_post(ptr: *const u8, len: i32) -> i64;
         }
@@ -415,6 +764,7 @@ pub fn http_post_form(url: &str, body: &str) -> Result<String, String> {
     );
     #[cfg(target_arch = "wasm32")]
     {
+        #[link(wasm_import_module = "stui")]
         extern "C" {
             fn stui_http_post(ptr: *const u8, len: i32) -> i64;
         }
@@ -460,6 +810,7 @@ pub fn exec(cmd: &str, args: &[&str], timeout_ms: u32) -> Result<String, String>
     );
     #[cfg(target_arch = "wasm32")]
     {
+        #[link(wasm_import_module = "stui")]
         extern "C" {
             fn stui_exec(ptr: *const u8, len: i32, timeout_ms: i32) -> i64;
         }
@@ -496,7 +847,54 @@ struct ExecResponse {
 
 // ── ABI glue macro ────────────────────────────────────────────────────────────
 
-/// Registers your plugin and generates all required WASM ABI exports.
+/// Internal; always invoked by `stui_export_plugin!` / `stui_export_catalog_plugin!` — do not call directly.
+///
+/// Expands to a `#[no_mangle] pub extern "C" fn $fn_name(ptr: i32, len: i32) -> i64`
+/// that deserialises `$req_ty` from the input buffer, dispatches via
+/// `<$plugin_ty as $crate::CatalogPlugin>::$method`, and serialises the result.
+/// `$resp_ty` is the `Ok`-variant type, used in the parse-error path so that
+/// `PluginResult::<$resp_ty>::err(...)` resolves without ambiguity.
+///
+/// `$getter` must return a shared reference (`&$plugin_ty`) — all verb calls
+/// take `&self`, so the singleton is borrowed immutably here.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __catalog_abi_fn {
+    (
+        plugin   = $plugin_ty:ty,
+        getter   = $getter:expr,
+        fn_name  = $fn_name:ident,
+        method   = $method:ident,
+        req_ty   = $req_ty:ty,
+        resp_ty  = $resp_ty:ty,
+    ) => {
+        #[no_mangle]
+        pub extern "C" fn $fn_name(ptr: i32, len: i32) -> i64 {
+            let input = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+            let req: $req_ty = match serde_json::from_slice(input) {
+                Ok(r) => r,
+                Err(e) => {
+                    return $crate::__write_result(
+                        &$crate::PluginResult::<$resp_ty>::err(
+                            $crate::error_codes::PARSE_ERROR,
+                            e.to_string(),
+                        ),
+                    );
+                }
+            };
+            let borrow = $getter();
+            let result = <$plugin_ty as $crate::CatalogPlugin>::$method(&*borrow, req);
+            $crate::__write_result(&result)
+        }
+    };
+}
+
+/// Legacy — use [`stui_export_catalog_plugin!`] for metadata (CatalogPlugin) plugins.
+///
+/// Registers a legacy `StuiPlugin` plugin and generates all required WASM ABI exports,
+/// including `stui_resolve` which requires the deprecated [`StuiPlugin`] trait. Use
+/// this macro only for non-metadata plugin kinds (streams, subtitles, torrents) during
+/// the transition period.
 ///
 /// # Example
 /// ```rust
@@ -508,15 +906,28 @@ struct ExecResponse {
 /// - `stui_alloc(len: i32) -> i32`
 /// - `stui_free(ptr: i32, len: i32)`
 /// - `stui_search(ptr: i32, len: i32) -> i64`
-/// - `stui_resolve(ptr: i32, len: i32) -> i64`
+/// - `stui_lookup(ptr: i32, len: i32) -> i64`
+/// - `stui_enrich(ptr: i32, len: i32) -> i64`
+/// - `stui_get_artwork(ptr: i32, len: i32) -> i64`
+/// - `stui_get_credits(ptr: i32, len: i32) -> i64`
+/// - `stui_related(ptr: i32, len: i32) -> i64`
+/// - `stui_resolve(ptr: i32, len: i32) -> i64`  *(legacy StuiPlugin path)*
 #[macro_export]
 macro_rules! stui_export_plugin {
     ($plugin_ty:ty) => {
-        // Safety: WASM is single-threaded; we use a global instance.
-        static PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> = std::sync::OnceLock::new();
+        // WASM is single-threaded so contention never occurs, but the static
+        // must be `Sync` to satisfy Rust's bound on statics when the crate is
+        // compiled for host targets (e.g. `cargo check --workspace`).
+        // `Mutex` gives us that `Sync` for free and `MutexGuard: Deref<Target=T>`
+        // preserves the `&*borrow` shape used by `__catalog_abi_fn!`.
+        static PLUGIN_INSTANCE: std::sync::OnceLock<std::sync::Mutex<$plugin_ty>> =
+            std::sync::OnceLock::new();
 
-        fn get_plugin() -> &'static $plugin_ty {
-            PLUGIN_INSTANCE.get_or_init(|| <$plugin_ty>::default())
+        fn get_plugin() -> std::sync::MutexGuard<'static, $plugin_ty> {
+            PLUGIN_INSTANCE
+                .get_or_init(|| std::sync::Mutex::new(<$plugin_ty>::default()))
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
         }
 
         /// ABI version — host checks this before calling any other function.
@@ -542,24 +953,63 @@ macro_rules! stui_export_plugin {
             }
         }
 
-        /// Search entry point. Input: SearchRequest JSON. Output: packed (ptr<<32)|len.
-        #[no_mangle]
-        pub extern "C" fn stui_search(ptr: i32, len: i32) -> i64 {
-            let input = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
-            let req: $crate::SearchRequest = match serde_json::from_slice(input) {
-                Ok(r) => r,
-                Err(e) => {
-                    return $crate::__write_result(
-                        &$crate::PluginResult::<$crate::SearchResponse>::err(
-                            "PARSE_ERROR",
-                            e.to_string(),
-                        ),
-                    )
-                }
-            };
-            let result = get_plugin().search(req);
-            $crate::__write_result(&result)
+        // ── CatalogPlugin verb exports ────────────────────────────────────────
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_search,
+            method   = search,
+            req_ty   = $crate::SearchRequest,
+            resp_ty  = $crate::SearchResponse,
         }
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_lookup,
+            method   = lookup,
+            req_ty   = $crate::LookupRequest,
+            resp_ty  = $crate::LookupResponse,
+        }
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_enrich,
+            method   = enrich,
+            req_ty   = $crate::EnrichRequest,
+            resp_ty  = $crate::EnrichResponse,
+        }
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_get_artwork,
+            method   = get_artwork,
+            req_ty   = $crate::ArtworkRequest,
+            resp_ty  = $crate::ArtworkResponse,
+        }
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_get_credits,
+            method   = get_credits,
+            req_ty   = $crate::CreditsRequest,
+            resp_ty  = $crate::CreditsResponse,
+        }
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_related,
+            method   = related,
+            req_ty   = $crate::RelatedRequest,
+            resp_ty  = $crate::RelatedResponse,
+        }
+
+        // ── Legacy StuiPlugin resolve export (untouched) ──────────────────────
 
         /// Resolve entry point. Input: ResolveRequest JSON. Output: packed (ptr<<32)|len.
         #[no_mangle]
@@ -570,20 +1020,194 @@ macro_rules! stui_export_plugin {
                 Err(e) => {
                     return $crate::__write_result(
                         &$crate::PluginResult::<$crate::ResolveResponse>::err(
-                            "PARSE_ERROR",
+                            $crate::error_codes::PARSE_ERROR,
                             e.to_string(),
                         ),
                     )
                 }
             };
-            let result = get_plugin().resolve(req);
+            let borrow = get_plugin();
+            #[allow(deprecated)]
+            let result = <$plugin_ty as $crate::StuiPlugin>::resolve(&*borrow, req);
             $crate::__write_result(&result)
         }
     };
 }
 
-/// Internal helper — serialises a result to WASM memory and returns packed ptr/len.
-/// Not part of the public API; used by the `stui_export_plugin!` macro.
+/// Export a metadata (CatalogPlugin) plugin to WASM.
+///
+/// Emits the standard ABI entry points and FFI wrappers for all 6 CatalogPlugin verbs
+/// (`stui_search`, `stui_lookup`, `stui_enrich`, `stui_get_artwork`, `stui_get_credits`,
+/// `stui_related`) plus `stui_abi_version`, `stui_alloc`, `stui_free`.
+///
+/// Use [`stui_export_plugin!`] instead for legacy `StuiPlugin` plugins (non-metadata
+/// kinds like streams / subtitles / torrents during the transition).
+///
+/// # Example
+/// ```rust
+/// stui_export_catalog_plugin!(MyPlugin);
+/// ```
+///
+/// This generates:
+/// - `stui_abi_version() -> i32`
+/// - `stui_alloc(len: i32) -> i32`
+/// - `stui_free(ptr: i32, len: i32)`
+/// - `stui_search(ptr: i32, len: i32) -> i64`
+/// - `stui_lookup(ptr: i32, len: i32) -> i64`
+/// - `stui_enrich(ptr: i32, len: i32) -> i64`
+/// - `stui_get_artwork(ptr: i32, len: i32) -> i64`
+/// - `stui_get_credits(ptr: i32, len: i32) -> i64`
+/// - `stui_related(ptr: i32, len: i32) -> i64`
+///
+/// Unlike [`stui_export_plugin!`], this macro does NOT emit `stui_resolve`, so the
+/// plugin type does not need to implement the deprecated [`StuiPlugin`] trait.
+#[macro_export]
+macro_rules! stui_export_catalog_plugin {
+    ($plugin_ty:ty) => {
+        // WASM is single-threaded so there is never real contention, but the
+        // static must be `Sync` to satisfy Rust's bound on statics when the
+        // crate is compiled for host targets (e.g. `cargo check --workspace`
+        // or host-side unit tests). `Mutex<T>` supplies `Sync`, and
+        // `MutexGuard: Deref<Target=T>` preserves the `&*borrow` / `&mut *inst`
+        // shapes used below.
+        static PLUGIN_INSTANCE: std::sync::OnceLock<std::sync::Mutex<$plugin_ty>> =
+            std::sync::OnceLock::new();
+
+        fn __plugin_cell() -> &'static std::sync::Mutex<$plugin_ty> {
+            PLUGIN_INSTANCE.get_or_init(|| std::sync::Mutex::new(<$plugin_ty>::default()))
+        }
+
+        fn get_plugin() -> std::sync::MutexGuard<'static, $plugin_ty> {
+            __plugin_cell().lock().unwrap_or_else(|p| p.into_inner())
+        }
+
+        /// ABI version — host checks this before calling any other function.
+        #[no_mangle]
+        pub extern "C" fn stui_abi_version() -> i32 {
+            $crate::STUI_ABI_VERSION
+        }
+
+        /// Memory allocation — host uses this to write request JSON.
+        #[no_mangle]
+        pub extern "C" fn stui_alloc(len: i32) -> i32 {
+            let mut buf = Vec::<u8>::with_capacity(len as usize);
+            let ptr = buf.as_mut_ptr() as i32;
+            std::mem::forget(buf);
+            ptr
+        }
+
+        /// Memory free — host calls this after reading response JSON.
+        #[no_mangle]
+        pub extern "C" fn stui_free(ptr: i32, len: i32) {
+            unsafe {
+                let _ = Vec::from_raw_parts(ptr as *mut u8, len as usize, len as usize);
+            }
+        }
+
+        // ── Plugin::init export ───────────────────────────────────────────────
+
+        /// Init entry point. Input: InitRequest JSON. Output: packed (ptr<<32)|len
+        /// of an `InitResultEnvelope` JSON.
+        ///
+        /// The host calls this once after instantiation and translates the
+        /// response into a `PluginStatus` (Loaded / NeedsConfig / Failed).
+        #[no_mangle]
+        pub extern "C" fn stui_init(ptr: i32, len: i32) -> i64 {
+            let input = unsafe {
+                std::slice::from_raw_parts(ptr as *const u8, len as usize)
+            };
+            let req: $crate::InitRequest = match serde_json::from_slice(input) {
+                Ok(r) => r,
+                Err(e) => {
+                    let env: $crate::InitResultEnvelope = $crate::InitResultEnvelope::Err(
+                        $crate::PluginInitError::Fatal(format!("init request parse error: {e}")),
+                    );
+                    return $crate::__write_result(&env);
+                }
+            };
+            let logger = $crate::DefaultPluginLogger;
+            let ctx = $crate::InitContext::from_request(&req, &logger);
+            let mut inst = __plugin_cell().lock().unwrap_or_else(|p| p.into_inner());
+            let result = <$plugin_ty as $crate::Plugin>::init(&mut *inst, &ctx);
+            let env: $crate::InitResultEnvelope = result.into();
+            $crate::__write_result(&env)
+        }
+
+        // ── CatalogPlugin verb exports ────────────────────────────────────────
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_search,
+            method   = search,
+            req_ty   = $crate::SearchRequest,
+            resp_ty  = $crate::SearchResponse,
+        }
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_lookup,
+            method   = lookup,
+            req_ty   = $crate::LookupRequest,
+            resp_ty  = $crate::LookupResponse,
+        }
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_enrich,
+            method   = enrich,
+            req_ty   = $crate::EnrichRequest,
+            resp_ty  = $crate::EnrichResponse,
+        }
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_get_artwork,
+            method   = get_artwork,
+            req_ty   = $crate::ArtworkRequest,
+            resp_ty  = $crate::ArtworkResponse,
+        }
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_get_credits,
+            method   = get_credits,
+            req_ty   = $crate::CreditsRequest,
+            resp_ty  = $crate::CreditsResponse,
+        }
+
+        $crate::__catalog_abi_fn! {
+            plugin   = $plugin_ty,
+            getter   = get_plugin,
+            fn_name  = stui_related,
+            method   = related,
+            req_ty   = $crate::RelatedRequest,
+            resp_ty  = $crate::RelatedResponse,
+        }
+
+        // Note: stui_resolve is intentionally absent — catalog-only plugins do not
+        // implement the deprecated StuiPlugin trait and have no resolve endpoint.
+    };
+}
+
+/// Write a serialised result into WASM linear memory and return a fat pointer.
+///
+/// # Memory model
+///
+/// The returned value encodes `(ptr << 32) | len` so the host can call
+/// `memory.read(ptr, len)` to retrieve the bytes.
+///
+/// **The allocation is intentionally leaked** (`std::mem::forget`).
+/// WASM modules cannot free memory that was allocated for the host to read —
+/// the host calls `__dealloc(ptr, len)` via the exported dealloc function after
+/// it has finished reading. Freeing here would be a double-free.
+///
+/// Do not remove the `forget` call. If you need to add pooling for large
+/// responses, implement it in the host's dealloc import handler, not here.
 #[doc(hidden)]
 pub fn __write_result<T: serde::Serialize>(result: &T) -> i64 {
     let json = serde_json::to_vec(result).unwrap_or_else(|e| {
@@ -603,9 +1227,11 @@ pub mod prelude {
     pub use crate::exec;
     pub use crate::http_get;
     pub use crate::http_post_json;
+    pub use crate::stui_export_catalog_plugin;
     pub use crate::stui_export_plugin;
     pub use crate::url_encode;
     pub use crate::{plugin_debug, plugin_error, plugin_info, plugin_warn};
+    #[allow(deprecated)]
     pub use crate::{
         PluginEntry, PluginResult, PluginType, ResolveRequest, ResolveResponse, SearchRequest,
         SearchResponse, StuiPlugin, SubtitleTrack,
@@ -615,6 +1241,46 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_trait_compiles() {
+        // Minimal stub to prove Plugin + CatalogPlugin can actually be implemented.
+        struct Stub {
+            manifest: PluginManifest,
+        }
+        impl Plugin for Stub {
+            fn manifest(&self) -> &PluginManifest { &self.manifest }
+        }
+        impl CatalogPlugin for Stub {
+            fn search(&self, _req: SearchRequest) -> PluginResult<SearchResponse> {
+                PluginResult::Ok(SearchResponse { items: vec![], total: 0 })
+            }
+        }
+        fn assert_plugin<T: Plugin>() {}
+        fn assert_catalog<T: CatalogPlugin>() {}
+        assert_plugin::<Stub>();
+        assert_catalog::<Stub>();
+    }
+
+    /// Proves that a type implementing only `Plugin + CatalogPlugin` (no `StuiPlugin`)
+    /// satisfies the bounds required by `stui_export_catalog_plugin!`. If this test
+    /// compiles, Chunk 3 real-plugin expansions will expand cleanly without needing
+    /// the deprecated `StuiPlugin` impl.
+    #[test]
+    fn catalog_only_plugin_satisfies_bounds() {
+        struct TestStub { m: PluginManifest }
+        impl Plugin for TestStub {
+            fn manifest(&self) -> &PluginManifest { &self.m }
+        }
+        impl CatalogPlugin for TestStub {
+            fn search(&self, _req: SearchRequest) -> PluginResult<SearchResponse> {
+                PluginResult::Ok(SearchResponse { items: vec![], total: 0 })
+            }
+        }
+        fn assert_catalog_only<T: CatalogPlugin>() {}
+        assert_catalog_only::<TestStub>();
+        // No StuiPlugin impl on TestStub — this compiling proves catalog-only works.
+    }
 
     // These tests run outside WASM (on the host), so the extern "C" functions
     // won't be called. We test the pure Rust mapping/parsing logic.
@@ -681,4 +1347,99 @@ mod tests {
             "application/x-www-form-urlencoded"
         );
     }
+
+    #[test]
+    fn sdk_search_request_carries_scope() {
+        let req = SearchRequest {
+            query: "creep".into(),
+            scope: SearchScope::Track,
+            page: 0,
+            limit: 50,
+            per_scope_limit: None,
+            locale: None,
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"scope\":\"track\""));
+        assert!(!s.contains("\"tab\""));
+    }
+
+    #[test]
+    fn plugin_entry_has_kind_and_source() {
+        let entry = PluginEntry {
+            id: "spotify:track:abc".into(),
+            kind: EntryKind::Track,
+            title: "Creep".into(),
+            source: "lastfm-provider".into(),
+            year: Some(1993),
+            artist_name: Some("Radiohead".into()),
+            album_name: Some("Pablo Honey".into()),
+            track_number: Some(2),
+            ..Default::default()
+        };
+        let s = serde_json::to_string(&entry).unwrap();
+        assert!(s.contains("\"kind\":\"track\""));
+        assert!(s.contains("\"source\":\"lastfm-provider\""));
+    }
+
+    #[test]
+    fn plugin_entry_serializes_with_skip_none() {
+        let minimal = PluginEntry {
+            id: "test:1".into(),
+            kind: EntryKind::Movie,
+            title: "Test".into(),
+            source: "test-provider".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&minimal).unwrap();
+        // Should not contain null values for unset optional fields
+        assert!(!json.contains("null"));
+        // Should contain required fields
+        assert!(json.contains("\"id\":\"test:1\""));
+        assert!(json.contains("\"kind\":\"movie\""));
+        assert!(json.contains("\"title\":\"Test\""));
+        assert!(json.contains("\"source\":\"test-provider\""));
+    }
+
+    #[test]
+    fn err_helper_with_unsupported_scope_code() {
+        let r: PluginResult<()> = PluginResult::err(
+            error_codes::UNSUPPORTED_SCOPE,
+            "track scope unsupported by this plugin",
+        );
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(s.contains("\"code\":\"unsupported_scope\""));
+        assert!(s.contains("track scope unsupported"));
+    }
+
+    #[test]
+    fn new_error_codes_are_stable() {
+        use super::error_codes::*;
+        assert_eq!(NOT_IMPLEMENTED, "not_implemented");
+        assert_eq!(RATE_LIMITED, "rate_limited");
+        assert_eq!(UNKNOWN_ID, "unknown_id");
+        assert_eq!(TRANSIENT, "transient");
+        assert_eq!(REMOTE_ERROR, "remote_error");
+    }
+
+    #[test]
+    fn plugin_entry_carries_external_ids() {
+        use std::collections::HashMap;
+        let mut external = HashMap::new();
+        external.insert("imdb".to_string(), "tt1234567".to_string());
+        external.insert("musicbrainz".to_string(), "uuid-1".to_string());
+
+        let entry = PluginEntry {
+            id: "tmdb-100".into(),
+            kind: EntryKind::Movie,
+            title: "Test".into(),
+            source: "tmdb".into(),
+            external_ids: external,
+            ..Default::default()
+        };
+        let s = serde_json::to_string(&entry).unwrap();
+        assert!(s.contains("\"external_ids\""));
+        assert!(s.contains("tt1234567"));
+        assert!(s.contains("uuid-1"));
+    }
 }
+

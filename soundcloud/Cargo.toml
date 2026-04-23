@@ -7,5 +7,5 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-stui-plugin-sdk = { path = "../../sdk" }
+stui-plugin-sdk = { path = "../sdk" }
 serde_json  = { version = "1", default-features = false, features = ["alloc"] }

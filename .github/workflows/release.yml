@@ -25,17 +25,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Only plugins migrated to the current SDK build here. Everything
+        # else is pending a per-plugin migration (StuiPlugin → Plugin +
+        # CatalogPlugin, SearchRequest.tab → scope, PluginEntry new
+        # fields, rating type change). Uncomment each line as its plugin
+        # is ported and `cargo build -p <plugin> --target wasm32-wasip1
+        # --release` succeeds locally.
         plugin:
-          - spotify
-          - tidal
-          - qobuz
-          - roon
-          - soundcloud
-          - jackett-provider
-          - prowlarr-provider
-          - opensubtitles-provider
           - example-provider
           - example-resolver
+          # - spotify
+          # - tidal
+          # - qobuz
+          # - roon
+          # - soundcloud
+          # - jackett-provider
+          # - prowlarr-provider
+          # - opensubtitles-provider
     steps:
       - uses: actions/checkout@v4
 
