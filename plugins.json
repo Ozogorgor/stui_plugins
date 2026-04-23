@@ -5,8 +5,8 @@
     "type": "wasm",
     "description": "Minimal example provider \u2014 returns hardcoded titles, no API key needed",
     "author": "stui",
-    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.1.2/example-provider-0.1.0.tar.gz",
-    "checksum": "sha256:d2cc5c52207af054fad325774b82ed8554b83032f7342a1f13e388d7e03b4b89",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/example-provider-0.1.0.tar.gz",
+    "checksum": "sha256:bdad0a1ca4bfe4a4f37eeec830d92ee9a77e19a45168274c377cd840ef82f04c",
     "homepage": "https://github.com/Ozogorgor/stui_plugins"
   },
   {
@@ -15,8 +15,38 @@
     "type": "wasm",
     "description": "A minimal example stream resolver plugin",
     "author": "stui",
-    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.1.2/example-resolver-0.1.0.tar.gz",
-    "checksum": "sha256:fab182234a29f0bc579b46e302c3d074ad467fcb0487d9989c5c239c7e962dd1",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/example-resolver-0.1.0.tar.gz",
+    "checksum": "sha256:2bac1338558a020666efd03ad0e9dc51a5ff09ccb83ddd428b13e8ec14ff943b",
+    "homepage": "https://github.com/Ozogorgor/stui_plugins"
+  },
+  {
+    "name": "jackett-provider",
+    "version": "0.1.0",
+    "type": "wasm",
+    "description": "Search torrents via a local Jackett instance",
+    "author": "stui",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/jackett-provider-0.1.0.tar.gz",
+    "checksum": "sha256:09d4f30cae893d53b9e86bb072d31c2bf3c31fdcfd4948bc60ff560a346f82a0",
+    "homepage": "https://github.com/Ozogorgor/stui_plugins"
+  },
+  {
+    "name": "opensubtitles-provider",
+    "version": "0.1.0",
+    "type": "wasm",
+    "description": "Subtitle search and download via OpenSubtitles REST API v1",
+    "author": "stui",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/opensubtitles-provider-0.1.0.tar.gz",
+    "checksum": "sha256:16df5b52fa02ea304a3504c641d349c30934e13bde08d663fdb841b53a5d370b",
+    "homepage": "https://github.com/Ozogorgor/stui_plugins"
+  },
+  {
+    "name": "prowlarr-provider",
+    "version": "0.1.0",
+    "type": "wasm",
+    "description": "Search torrents via a Prowlarr indexer",
+    "author": "stui",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/prowlarr-provider-0.1.0.tar.gz",
+    "checksum": "sha256:0b32df38ec20815bf02d0d2805829658ebe5ffdae327f99c32d883165cd660a4",
     "homepage": "https://github.com/Ozogorgor/stui_plugins"
   },
   {
@@ -25,8 +55,8 @@
     "type": "rpc",
     "description": "Stream provider via Torrentio \u2014 resolves IMDB IDs to magnet links and torrent URLs",
     "author": "stui community",
-    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.1.2/torrentio-rpc-1.0.0.tar.gz",
-    "checksum": "sha256:951862dfce10c3f18d805188e7a4d63198ed671df721e99b9241031a45bee62e",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/torrentio-rpc-1.0.0.tar.gz",
+    "checksum": "sha256:7063694813c30308993e6220663c5e1fa2ee8b3e08521d1bb59dae21f173fb3a",
     "homepage": "https://torrentio.strem.fun"
   }
 ]
