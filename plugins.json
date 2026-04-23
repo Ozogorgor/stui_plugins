@@ -5,8 +5,8 @@
     "type": "wasm",
     "description": "Minimal example provider \u2014 returns hardcoded titles, no API key needed",
     "author": "stui",
-    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/example-provider-0.1.0.tar.gz",
-    "checksum": "sha256:bdad0a1ca4bfe4a4f37eeec830d92ee9a77e19a45168274c377cd840ef82f04c",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.3.0/example-provider-0.1.0.tar.gz",
+    "checksum": "sha256:7735449065f963ceacbb7dc8658bd8eebbf1c36218a93517224085345ec2dfe7",
     "homepage": "https://github.com/Ozogorgor/stui_plugins"
   },
   {
@@ -15,8 +15,8 @@
     "type": "wasm",
     "description": "A minimal example stream resolver plugin",
     "author": "stui",
-    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/example-resolver-0.1.0.tar.gz",
-    "checksum": "sha256:2bac1338558a020666efd03ad0e9dc51a5ff09ccb83ddd428b13e8ec14ff943b",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.3.0/example-resolver-0.1.0.tar.gz",
+    "checksum": "sha256:dac225acecc3daa08375c3fd8e652e993c49b298cb34040078a01647ad3e0b85",
     "homepage": "https://github.com/Ozogorgor/stui_plugins"
   },
   {
@@ -25,8 +25,18 @@
     "type": "wasm",
     "description": "Search torrents via a local Jackett instance",
     "author": "stui",
-    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/jackett-provider-0.1.0.tar.gz",
-    "checksum": "sha256:09d4f30cae893d53b9e86bb072d31c2bf3c31fdcfd4948bc60ff560a346f82a0",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.3.0/jackett-provider-0.1.0.tar.gz",
+    "checksum": "sha256:943bf48f01741e49331dc4c94b14de5b10e8fafdcce9f713e9a0320ac415de00",
+    "homepage": "https://github.com/Ozogorgor/stui_plugins"
+  },
+  {
+    "name": "kitsunekko",
+    "version": "0.1.0",
+    "type": "wasm",
+    "description": "Anime subtitle scraper for kitsunekko.net",
+    "author": "stui",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.3.0/kitsunekko-0.1.0.tar.gz",
+    "checksum": "sha256:1fc81b92e06bc88eca92d148f6874d427c593bda613eac3f358b8c5baadee826",
     "homepage": "https://github.com/Ozogorgor/stui_plugins"
   },
   {
@@ -35,8 +45,8 @@
     "type": "wasm",
     "description": "Subtitle search and download via OpenSubtitles REST API v1",
     "author": "stui",
-    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/opensubtitles-provider-0.1.0.tar.gz",
-    "checksum": "sha256:16df5b52fa02ea304a3504c641d349c30934e13bde08d663fdb841b53a5d370b",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.3.0/opensubtitles-provider-0.1.0.tar.gz",
+    "checksum": "sha256:16e95e72072805dfc705c6c39b5c8037c17b3cee687dc4cfb0db4af8d42c0f67",
     "homepage": "https://github.com/Ozogorgor/stui_plugins"
   },
   {
@@ -45,8 +55,18 @@
     "type": "wasm",
     "description": "Search torrents via a Prowlarr indexer",
     "author": "stui",
-    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/prowlarr-provider-0.1.0.tar.gz",
-    "checksum": "sha256:0b32df38ec20815bf02d0d2805829658ebe5ffdae327f99c32d883165cd660a4",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.3.0/prowlarr-provider-0.1.0.tar.gz",
+    "checksum": "sha256:6125798a9d2387194cef298cc6be89806bf23ed34a50d8bac86bcff3e3fbad86",
+    "homepage": "https://github.com/Ozogorgor/stui_plugins"
+  },
+  {
+    "name": "subscene",
+    "version": "0.1.0",
+    "type": "wasm",
+    "description": "Subtitle scraper for subscene.com",
+    "author": "stui",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.3.0/subscene-0.1.0.tar.gz",
+    "checksum": "sha256:90bef23373557077737ad5259f716787168bb39472f5c79906b2256dd34fe535",
     "homepage": "https://github.com/Ozogorgor/stui_plugins"
   },
   {
@@ -55,8 +75,18 @@
     "type": "rpc",
     "description": "Stream provider via Torrentio \u2014 resolves IMDB IDs to magnet links and torrent URLs",
     "author": "stui community",
-    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.2.0/torrentio-rpc-1.0.0.tar.gz",
-    "checksum": "sha256:7063694813c30308993e6220663c5e1fa2ee8b3e08521d1bb59dae21f173fb3a",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.3.0/torrentio-rpc-1.0.0.tar.gz",
+    "checksum": "sha256:1592645a8265a6b658f97307316e513f3886a673592e07bb1df1e1a92a6afc4a",
     "homepage": "https://torrentio.strem.fun"
+  },
+  {
+    "name": "yify-subs",
+    "version": "0.1.0",
+    "type": "wasm",
+    "description": "Subtitle scraper for YIFY movie releases",
+    "author": "stui",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.3.0/yify-subs-0.1.0.tar.gz",
+    "checksum": "sha256:d3e98568b018c534e26c657b91172058793fc0613831ead67e219df4db69a85b",
+    "homepage": "https://github.com/Ozogorgor/stui_plugins"
   }
 ]
