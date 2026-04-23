@@ -1,0 +1,32 @@
+[
+  {
+    "name": "example-provider",
+    "version": "0.1.0",
+    "type": "wasm",
+    "description": "Minimal example provider \u2014 returns hardcoded titles, no API key needed",
+    "author": "stui",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.1.2/example-provider-0.1.0.tar.gz",
+    "checksum": "sha256:d2cc5c52207af054fad325774b82ed8554b83032f7342a1f13e388d7e03b4b89",
+    "homepage": "https://github.com/Ozogorgor/stui_plugins"
+  },
+  {
+    "name": "example-resolver",
+    "version": "0.1.0",
+    "type": "wasm",
+    "description": "A minimal example stream resolver plugin",
+    "author": "stui",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.1.2/example-resolver-0.1.0.tar.gz",
+    "checksum": "sha256:fab182234a29f0bc579b46e302c3d074ad467fcb0487d9989c5c239c7e962dd1",
+    "homepage": "https://github.com/Ozogorgor/stui_plugins"
+  },
+  {
+    "name": "torrentio-rpc",
+    "version": "1.0.0",
+    "type": "rpc",
+    "description": "Stream provider via Torrentio \u2014 resolves IMDB IDs to magnet links and torrent URLs",
+    "author": "stui community",
+    "binary_url": "https://github.com/Ozogorgor/stui_plugins/releases/download/v0.1.2/torrentio-rpc-1.0.0.tar.gz",
+    "checksum": "sha256:951862dfce10c3f18d805188e7a4d63198ed671df721e99b9241031a45bee62e",
+    "homepage": "https://torrentio.strem.fun"
+  }
+]
