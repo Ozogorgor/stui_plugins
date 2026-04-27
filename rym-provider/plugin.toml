@@ -1,0 +1,27 @@
+[plugin]
+id           = "rym"
+name         = "rym"
+version      = "1.0.0"
+abi_version   = 1
+description  = "RateYourMusic — album ratings and charts"
+
+[permissions]
+# RYM doesn't have an API — scraping with polite rate limits.
+network = ["rateyourmusic.com"]
+
+[rate_limit]
+# Be respectful: RYM blocks aggressive scraping.
+requests_per_second = 1
+burst             = 2
+
+[capabilities.catalog]
+kinds = ["artist", "album"]
+
+search  = true
+lookup  = true
+enrich  = true
+
+[meta]
+author   = "stui"
+license  = "GPL-3.0"
+homepage = "https://rateyourmusic.com"
