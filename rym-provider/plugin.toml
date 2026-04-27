@@ -18,7 +18,9 @@ burst             = 2
 kinds = ["artist", "album"]
 
 search  = true
-lookup  = true
+# RYM has no stable id source the runtime knows how to route, so
+# `lookup` isn't advertised — enrich (title+artist search → detail
+# page scrape) is the path the catalog uses to fetch ratings.
 enrich  = true
 
 [meta]
