@@ -40,11 +40,11 @@ jobs:
           - kitsunekko
           - subscene
           - yify-subs
+          - rym-provider
           # Streaming services stay commented — separate session.
           # - spotify
           # - tidal
           # - qobuz
-          # - roon
           # - soundcloud
     steps:
       - uses: actions/checkout@v4
