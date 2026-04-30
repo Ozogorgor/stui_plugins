@@ -10,9 +10,13 @@ tags        = ["streams", "movies", "tv", "anime", "music"]
 [capabilities]
 streams = true
 
+# Stream-only — do NOT advertise catalog capability. The catalog
+# trending fan-out fires on every Series/Movies tab load with an
+# empty query; if Jackett answers it, raw torrent file names like
+# "S05E05 1080p WEB-DL" leak into the catalog as fake series entries.
 [capabilities.catalog]
-kinds  = ["movie", "series"]
-search = true
+kinds  = []
+search = false
 
 [env]
 JACKETT_URL     = "http://localhost:9117"
@@ -25,6 +29,7 @@ hint      = "Base URL of your Jackett instance"
 masked    = false
 required  = true
 default   = "http://localhost:9117"
+env_var   = "JACKETT_URL"
 
 [[config]]
 key       = "api_key"
@@ -32,6 +37,7 @@ label     = "Jackett API Key"
 hint      = "Jackett → Dashboard → API Key"
 masked    = true
 required  = true
+env_var   = "JACKETT_API_KEY"
 
 [permissions]
 # Jackett is typically on localhost — no external internet permission needed.

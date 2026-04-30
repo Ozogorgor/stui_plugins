@@ -1,0 +1,18 @@
+[package]
+name = "rjm-rating-weights"
+version = "0.1.0"
+edition = "2021"
+description = "stui plugin — custom rating source weights"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+stui-plugin-sdk = { path = "../../sdk" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true

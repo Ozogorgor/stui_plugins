@@ -1,0 +1,58 @@
+# nyaa-provider — plugin manifest
+
+[plugin]
+name        = "nyaa-provider"
+version     = "0.1.0"
+abi_version = 1
+description = "Anime stream resolver via nyaa.si"
+tags        = ["streams", "anime"]
+
+[capabilities]
+streams = true
+
+[capabilities.catalog]
+kinds  = []
+search = false
+
+[env]
+NYAA_BASE_URL = "https://nyaa.si"
+# Newznab category for the anime root (1_0 = all anime sub-categories).
+# Override to e.g. 1_2 for English-translated anime only.
+NYAA_CATEGORY = "1_0"
+# Trust filter: 0 = no filter, 1 = no remakes, 2 = trusted only.
+NYAA_FILTER   = "0"
+
+[[config]]
+key       = "base_url"
+label     = "Nyaa Base URL"
+hint      = "Default: https://nyaa.si"
+masked    = false
+required  = false
+default   = "https://nyaa.si"
+env_var   = "NYAA_BASE_URL"
+
+[[config]]
+key       = "category"
+label     = "Nyaa Category"
+hint      = "1_0=all anime, 1_2=English-translated, 1_3=non-English-translated, 1_4=raw"
+masked    = false
+required  = false
+default   = "1_0"
+env_var   = "NYAA_CATEGORY"
+
+[[config]]
+key       = "filter"
+label     = "Nyaa Filter"
+hint      = "0=none, 1=no remakes, 2=trusted only"
+masked    = false
+required  = false
+default   = "0"
+env_var   = "NYAA_FILTER"
+
+[permissions]
+network = ["nyaa.si"]
+
+[meta]
+author   = "stui"
+license  = "MIT"
+homepage = "https://github.com/Ozogorgor/stui_plugins"

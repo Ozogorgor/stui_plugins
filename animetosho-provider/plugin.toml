@@ -1,0 +1,37 @@
+# animetosho-provider — plugin manifest
+
+[plugin]
+name        = "animetosho-provider"
+version     = "0.1.0"
+abi_version = 1
+description = "Anime stream resolver via animetosho.org (aggregates Nyaa, AniDex, NekoBT)"
+tags        = ["streams", "anime"]
+
+[capabilities]
+streams = true
+
+[capabilities.catalog]
+kinds  = []
+search = false
+
+[env]
+ANIMETOSHO_BASE_URL = "https://animetosho.org"
+# Server-side filter that excludes low-quality / fake releases.
+ANIMETOSHO_QX       = "1"
+
+[[config]]
+key       = "base_url"
+label     = "AnimeTosho Base URL"
+hint      = "Default: https://animetosho.org"
+masked    = false
+required  = false
+default   = "https://animetosho.org"
+env_var   = "ANIMETOSHO_BASE_URL"
+
+[permissions]
+network = ["animetosho.org"]
+
+[meta]
+author   = "stui"
+license  = "MIT"
+homepage = "https://github.com/Ozogorgor/stui_plugins"

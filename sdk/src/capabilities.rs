@@ -211,7 +211,7 @@ pub struct CastMember {
     pub external_ids: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CrewRole {
     Director,
@@ -230,6 +230,8 @@ pub enum CrewRole {
     CostumeDesigner,
     SoundDesigner,
     VfxSupervisor,
+    AnimationDirector,
+    LeadAnimator,
     Other(String),
 }
 
@@ -268,6 +270,8 @@ pub fn normalize_crew_role(s: &str) -> CrewRole {
         "costume designer" => CrewRole::CostumeDesigner,
         "sound designer" => CrewRole::SoundDesigner,
         "vfx supervisor" | "visual effects supervisor" => CrewRole::VfxSupervisor,
+        "animation director" | "anime director" => CrewRole::AnimationDirector,
+        "lead animator" | "chief animation director" | "sakuga director" => CrewRole::LeadAnimator,
         _ => CrewRole::Other(s.to_string()),
     }
 }
@@ -298,6 +302,45 @@ pub struct RelatedRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelatedResponse {
     pub items: Vec<PluginEntry>,
+}
+
+// ── Episodes verb ─────────────────────────────────────────────────────────────
+
+/// Request for one season's episode list.
+///
+/// `season` is the natural-numbered season (e.g. 1, 2, 3 — never 0 for
+/// "Specials" since most providers shape that differently and stui's
+/// EpisodeScreen treats it as out-of-band).  `id_source` is included so
+/// providers that key by foreign ids (e.g. OMDb on imdb) can refuse a
+/// request meant for a different namespace cleanly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodesRequest {
+    pub series_id: String,
+    pub id_source: String,
+    pub season: u32,
+}
+
+/// Single episode descriptor. Mirrors the TUI's `ipc.EpisodeEntry` shape;
+/// the runtime forwards each item straight through to the wire.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodeWire {
+    pub season: u32,
+    pub episode: u32,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub air_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_mins: Option<u32>,
+    pub provider: String,
+    /// Provider-native id for the individual episode (used later to
+    /// resolve streams).  When the provider doesn't expose a per-episode
+    /// id, plugins should synthesise `<series_id>:s<season>e<episode>`.
+    pub entry_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodesResponse {
+    pub episodes: Vec<EpisodeWire>,
 }
 
 // ── err_not_implemented helper ────────────────────────────────────────────────
@@ -451,5 +494,42 @@ mod tests {
         } else {
             panic!("round-trip lost Other variant");
         }
+    }
+
+    #[test]
+    fn crew_role_animation_director_round_trips() {
+        let v = CrewRole::AnimationDirector;
+        let s = serde_json::to_string(&v).unwrap();
+        assert_eq!(s, "\"animation_director\"");
+        let back: CrewRole = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, CrewRole::AnimationDirector);
+    }
+
+    #[test]
+    fn crew_role_lead_animator_round_trips() {
+        let v = CrewRole::LeadAnimator;
+        let s = serde_json::to_string(&v).unwrap();
+        assert_eq!(s, "\"lead_animator\"");
+        let back: CrewRole = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, CrewRole::LeadAnimator);
+    }
+
+    #[test]
+    fn normalize_anime_director_variants() {
+        assert_eq!(normalize_crew_role("animation director"), CrewRole::AnimationDirector);
+        assert_eq!(normalize_crew_role("Animation Director"), CrewRole::AnimationDirector);
+        assert_eq!(normalize_crew_role("anime director"),     CrewRole::AnimationDirector);
+    }
+
+    #[test]
+    fn normalize_lead_animator_variants() {
+        assert_eq!(normalize_crew_role("lead animator"),            CrewRole::LeadAnimator);
+        assert_eq!(normalize_crew_role("chief animation director"), CrewRole::LeadAnimator);
+        assert_eq!(normalize_crew_role("sakuga director"),          CrewRole::LeadAnimator);
+    }
+
+    #[test]
+    fn normalize_preserves_other_fallthrough() {
+        assert_eq!(normalize_crew_role("key animator"), CrewRole::Other("key animator".into()));
     }
 }

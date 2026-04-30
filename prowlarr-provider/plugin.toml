@@ -10,9 +10,13 @@ tags        = ["streams", "movies", "tv", "anime", "music"]
 [capabilities]
 streams = true
 
+# Stream-only — do NOT advertise catalog capability. The catalog
+# trending fan-out fires on every Series/Movies tab load with an
+# empty query; if Prowlarr answers it, raw torrent file names like
+# "S05E05 1080p WEB-DL" leak into the catalog as fake series entries.
 [capabilities.catalog]
-kinds  = ["movie", "series"]
-search = true
+kinds  = []
+search = false
 
 [env]
 PROWLARR_URL     = "http://localhost:9696"
@@ -25,6 +29,7 @@ hint      = "Base URL of your Prowlarr instance"
 masked    = false
 required  = true
 default   = "http://localhost:9696"
+env_var   = "PROWLARR_URL"
 
 [[config]]
 key       = "api_key"
@@ -32,6 +37,7 @@ label     = "Prowlarr API Key"
 hint      = "Prowlarr → Settings → General → API Key"
 masked    = true
 required  = true
+env_var   = "PROWLARR_API_KEY"
 
 [permissions]
 network = ["localhost", "127.0.0.1", "::1"]

@@ -1,0 +1,65 @@
+# rutracker-provider — plugin manifest
+
+[plugin]
+name        = "rutracker-provider"
+version     = "0.1.0"
+abi_version = 1
+description = "Direct RuTracker scraper — broad RU catalog (movies/series/music/audiobooks)"
+tags        = ["streams", "movies", "tv", "music"]
+
+[capabilities]
+streams = true
+
+[capabilities.catalog]
+kinds  = []
+search = false
+
+[env]
+RUTRACKER_BASE_URL = "https://rutracker.org"
+# Manually-supplied bb_session cookie value. Get it from a logged-in
+# browser: DevTools → Application → Cookies → rutracker.org → bb_session
+# → copy the Value column. The plugin sends it verbatim as
+# `Cookie: bb_session=<value>` on every request.
+# Automated login will replace this once the SDK can surface response
+# headers from POST (current limitation).
+RUTRACKER_BB_SESSION = ""
+# Hard cap on the per-search second-tier topic-page fetches that
+# extract magnets. RuTracker's search results page lists topics but
+# omits magnets; we fetch each topic page sequentially for the top-N
+# rows. Higher N = slower response but more candidates. 8 is a sweet
+# spot — 4-5 s end-to-end.
+RUTRACKER_MAX_RESULTS = "8"
+
+[[config]]
+key       = "base_url"
+label     = "RuTracker Base URL"
+hint      = "Default: https://rutracker.org (try rutracker.net / rutracker.nl if blocked)"
+masked    = false
+required  = false
+default   = "https://rutracker.org"
+env_var   = "RUTRACKER_BASE_URL"
+
+[[config]]
+key       = "bb_session"
+label     = "bb_session Cookie"
+hint      = "Paste the bb_session cookie value from a logged-in browser"
+masked    = true
+required  = true
+env_var   = "RUTRACKER_BB_SESSION"
+
+[[config]]
+key       = "max_results"
+label     = "Max results per search"
+hint      = "Higher = more candidates, slower (each adds one HTTP fetch)"
+masked    = false
+required  = false
+default   = "8"
+env_var   = "RUTRACKER_MAX_RESULTS"
+
+[permissions]
+network = ["rutracker.org", "rutracker.net", "rutracker.nl"]
+
+[meta]
+author   = "stui"
+license  = "MIT"
+homepage = "https://github.com/Ozogorgor/stui_plugins"

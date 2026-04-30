@@ -1,8 +1,8 @@
 [package]
-name        = "jackett-provider"
+name        = "nyaa-provider"
 version     = "0.1.0"
 edition     = "2021"
-description = "stui plugin — searches Jackett for torrents"
+description = "stui plugin — anime stream resolver via nyaa.si"
 
 [lib]
 crate-type = ["cdylib"]
@@ -12,4 +12,3 @@ stui-plugin-sdk = { path = "../sdk" }
 serde            = { version = "1", features = ["derive"] }
 serde_json       = "1"
 quick-xml        = { version = "0.36", features = ["serialize"] }
-

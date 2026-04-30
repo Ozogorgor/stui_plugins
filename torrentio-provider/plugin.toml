@@ -1,0 +1,60 @@
+# torrentio-provider — plugin manifest
+
+[plugin]
+name        = "torrentio-provider"
+version     = "0.1.0"
+abi_version = 1
+description = "Stream provider via Torrentio (curated public torrent aggregator)"
+tags        = ["streams", "movies", "tv", "anime"]
+
+[capabilities]
+streams = true
+
+[capabilities.catalog]
+kinds  = []
+search = false
+
+[env]
+TORRENTIO_BASE_URL  = "https://torrentio.strem.fun"
+# Leave providers empty to use Torrentio's server-side defaults.
+# Override with a pipe-separated list (e.g. "yts|eztv|1337x") only if
+# you need to filter — Torrentio prunes shut-down trackers (rarbg,
+# kickass) automatically, so explicit lists tend to bit-rot.
+TORRENTIO_PROVIDERS = ""
+TORRENTIO_DEBRID    = ""
+
+[[config]]
+key       = "base_url"
+label     = "Torrentio Base URL"
+hint      = "Public instance default: https://torrentio.strem.fun"
+masked    = false
+required  = false
+default   = "https://torrentio.strem.fun"
+env_var   = "TORRENTIO_BASE_URL"
+
+[[config]]
+key       = "providers"
+label     = "Torrentio Providers (optional)"
+hint      = "Pipe-separated tracker list — leave empty for server defaults"
+masked    = false
+required  = false
+default   = ""
+env_var   = "TORRENTIO_PROVIDERS"
+
+[[config]]
+key       = "debrid"
+label     = "Debrid Token (optional)"
+hint      = "e.g. realdebrid=YOUR_TOKEN — leave blank for public magnets"
+masked    = true
+required  = false
+env_var   = "TORRENTIO_DEBRID"
+
+[permissions]
+# Default public instance. If you switch to a self-hosted Torrentio,
+# add its hostname here.
+network = ["torrentio.strem.fun"]
+
+[meta]
+author   = "stui"
+license  = "MIT"
+homepage = "https://github.com/Ozogorgor/stui_plugins"

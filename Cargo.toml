@@ -8,6 +8,11 @@ members = [
     "soundcloud",
     "jackett-provider",
     "prowlarr-provider",
+    "torrentio-provider",
+    "animetosho-provider",
+    "nyaa-provider",
+    "torapi-provider",
+    "rutracker-provider",
     "opensubtitles-provider",
     "example-provider",
     "example-resolver",
@@ -17,7 +22,6 @@ members = [
     "rym-provider",
 ]
 
-# torrentio-rpc is a Python plugin — not a Cargo member
 
 [profile.release]
 lto = true

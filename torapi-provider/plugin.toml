@@ -1,0 +1,51 @@
+# torapi-provider — plugin manifest
+
+[plugin]
+name        = "torapi-provider"
+version     = "0.1.0"
+abi_version = 1
+description = "Russian tracker coverage via Lifailon/TorAPI (RuTracker/Kinozal/RuTor/NoNameClub)"
+tags        = ["streams", "movies", "tv", "music"]
+
+[capabilities]
+streams = true
+
+[capabilities.catalog]
+kinds  = []
+search = false
+
+[env]
+# Public Vercel instance from the upstream project. Self-host
+# (`docker run lifailon/torapi`) and override this if you'd rather
+# not depend on a free shared deployment.
+TORAPI_BASE_URL = "https://torapi.vercel.app"
+# Per-provider result cap. Higher = more candidates but slower
+# response (the upstream fan-out scales with limit).
+TORAPI_LIMIT    = "20"
+
+[[config]]
+key       = "base_url"
+label     = "TorAPI Base URL"
+hint      = "Default: https://torapi.vercel.app — set to a self-hosted URL if you run the Docker image"
+masked    = false
+required  = false
+default   = "https://torapi.vercel.app"
+env_var   = "TORAPI_BASE_URL"
+
+[[config]]
+key       = "limit"
+label     = "Per-provider Result Limit"
+hint      = "Higher = more candidates, longer response time"
+masked    = false
+required  = false
+default   = "20"
+env_var   = "TORAPI_LIMIT"
+
+[permissions]
+# Default Vercel host. If you self-host, add your hostname here too.
+network = ["torapi.vercel.app"]
+
+[meta]
+author   = "stui"
+license  = "MIT"
+homepage = "https://github.com/Ozogorgor/stui_plugins"

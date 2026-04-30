@@ -35,12 +35,26 @@
 //! cp plugin.toml ~/.stui/plugins/prowlarr-provider/
 //! ```
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use stui_plugin_sdk::prelude::*;
+
+/// Accept JSON `null` for a field and substitute the type's default.
+/// Pair with `#[serde(default, deserialize_with = "null_to_default")]`
+/// on numeric fields where indexers occasionally send `null` instead
+/// of `0` — `#[serde(default)]` alone only handles missing keys, not
+/// explicit nulls.
+fn null_to_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Option::unwrap_or_default)
+}
 use stui_plugin_sdk::{
     parse_manifest, PluginManifest,
-    Plugin, CatalogPlugin,
+    Plugin, CatalogPlugin, StreamProvider,
     EntryKind, SearchScope,
+    FindStreamsRequest, FindStreamsResponse, Stream,
 };
 
 // ── Plugin struct ─────────────────────────────────────────────────────────────
@@ -84,7 +98,7 @@ impl CatalogPlugin for ProwlarrProvider {
 
         let query_enc = url_encode(&req.query);
         let url = format!(
-            "{}/api/v1/search?query={}&indexerIds=-1&{}&type=search",
+            "{}/api/v1/search?query={}&{}&type=search",
             cfg.base_url,
             query_enc,
             build_cat_params(categories),
@@ -129,76 +143,87 @@ impl CatalogPlugin for ProwlarrProvider {
     // plugin, not a metadata source.
 }
 
-// `StuiPlugin` is deprecated in favor of `Plugin + CatalogPlugin`, but
-// `stui_export_plugin!` still requires it for the `stui_resolve` ABI
-// export. This block goes away when the subtitle/stream ABIs land and
-// the macro drops its `$plugin_ty: StuiPlugin` bound.
-#[allow(deprecated)]
-impl StuiPlugin for ProwlarrProvider {
-    fn name(&self) -> &str { &self.manifest.plugin.name }
-    fn version(&self) -> &str { &self.manifest.plugin.version }
-    fn plugin_type(&self) -> PluginType { PluginType::Provider }
-
-    // Never dispatched — stui_search routes through CatalogPlugin::search
-    // via the stui_export_plugin! macro. Kept as a trait stub so the
-    // macro's bound `$plugin_ty: StuiPlugin` is satisfied.
-    fn search(&self, _req: SearchRequest) -> PluginResult<SearchResponse> {
-        PluginResult::err("LEGACY_UNUSED", "search dispatches via CatalogPlugin")
-    }
-
-    fn resolve(&self, req: ResolveRequest) -> PluginResult<ResolveResponse> {
-        // The entry ID is "{infoHash}|{downloadUrl}" — packed by into_entry().
-        // We extract the download URL (or build a magnet) and return it to
-        // the runtime, which hands it to aria2.
-        let (info_hash, download_url) = parse_entry_id(&req.entry_id);
-
-        let stream_url = if !download_url.is_empty() {
-            // Direct .torrent download URL — aria2 will fetch + parse it
-            download_url
-        } else if !info_hash.is_empty() {
-            // Build a minimal magnet URI from the hash
-            format!("magnet:?xt=urn:btih:{}&dn=torrent", info_hash)
-        } else {
-            return PluginResult::err("RESOLVE_ERROR", "no downloadUrl or infoHash");
+// ── StreamProvider impl — episode/movie-anchored stream search ──────────────
+//
+// Mirrors the jackett-provider design: takes a FindStreamsRequest
+// (title + year + season/episode + external_ids), runs a Prowlarr
+// /api/v1/search, projects each ProwlarrResult into a rich `Stream`
+// with magnet URL + quality + codec + source + hdr + seeders +
+// size_bytes. The runtime aggregates across stream providers and
+// ranks via the user's policy before handing back to the TUI.
+impl StreamProvider for ProwlarrProvider {
+    fn find_streams(&self, req: FindStreamsRequest) -> PluginResult<FindStreamsResponse> {
+        let cfg = match Config::load() {
+            Ok(c) => c,
+            Err(e) => return PluginResult::err("CONFIG_ERROR", &e),
         };
 
-        let truncated: String = stream_url.chars().take(80).collect();
-        plugin_info!("prowlarr: resolve → {}", truncated);
+        let query = build_query(&req);
+        let categories = match req.kind {
+            EntryKind::Movie => "2000,2010,2020,2030",
+            EntryKind::Series | EntryKind::Episode => "5000,5020,5040,5070,5080",
+            _ => "2000,5000",
+        };
 
-        PluginResult::ok(ResolveResponse {
-            stream_url,
-            // Quality is already embedded in PluginEntry.description at
-            // search time (extracted from the release title); the resolver
-            // doesn't re-derive it.
-            quality: None,
-            subtitles: vec![],
-        })
+        let url = format!(
+            "{}/api/v1/search?query={}&{}&type=search",
+            cfg.base_url,
+            url_encode(&query),
+            build_cat_params(categories),
+        );
+
+        plugin_info!("prowlarr: find_streams query — {}", query);
+
+        let raw = match http_get_with_key(&url, &cfg.api_key) {
+            Ok(r) => r,
+            Err(e) => return PluginResult::err("HTTP_ERROR", &e),
+        };
+        let results: Vec<ProwlarrResult> = match serde_json::from_str(&raw) {
+            Ok(r) => r,
+            Err(e) => return PluginResult::err("PARSE_ERROR", &e.to_string()),
+        };
+
+        let provider_name = self.manifest.plugin.name.clone();
+        let streams: Vec<Stream> = results
+            .into_iter()
+            .filter_map(|r| r.into_stream(&provider_name))
+            .collect();
+
+        plugin_info!("prowlarr: find_streams returned {} candidates", streams.len());
+        PluginResult::ok(FindStreamsResponse { streams })
     }
 }
 
 // ── Prowlarr API types ────────────────────────────────────────────────────────
 
-/// One result from GET /api/v1/search
+/// One result from GET /api/v1/search.
+///
+/// Indexers vary in which fields they fill — `downloadUrl` and
+/// `infoHash` are commonly returned as JSON `null` rather than
+/// being omitted. `#[serde(default)]` only handles missing keys,
+/// not nulls, so the optional string fields are typed `Option<String>`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProwlarrResult {
     title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     size: u64, // bytes
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     seeders: i32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     leechers: i32,
     #[serde(default)]
-    indexer: String,
+    indexer: Option<String>,
     #[serde(default)]
-    protocol: String, // "torrent" | "usenet"
+    protocol: Option<String>, // "torrent" | "usenet"
     #[serde(default)]
-    download_url: String, // direct .torrent URL (may be empty)
+    download_url: Option<String>, // direct .torrent URL
     #[serde(default)]
-    info_url: String, // tracker page
+    magnet_url: Option<String>, // magnet: link (most indexers populate this)
     #[serde(default)]
-    info_hash: String, // 40-char hex SHA1
+    info_url: Option<String>, // tracker page
+    #[serde(default)]
+    info_hash: Option<String>, // 40-char hex SHA1
     #[serde(default)]
     imdb_id: Option<i64>,
     #[serde(default)]
@@ -207,20 +232,67 @@ struct ProwlarrResult {
 }
 
 impl ProwlarrResult {
+    /// Convert one Prowlarr hit into a rich `Stream` for the new
+    /// `find_streams` flow. Returns `None` when no usable URL handle
+    /// is present.
+    fn into_stream(self, provider: &str) -> Option<Stream> {
+        let nonempty = |s: &Option<String>| s.as_deref().filter(|v| !v.is_empty()).map(str::to_string);
+        // Magnet URL is the most useful handle — it carries the info-hash
+        // plus tracker list — so prefer it over downloadUrl (which is a
+        // .torrent file fetch) and the bare info-hash (which lacks trackers).
+        let url = if let Some(m) = nonempty(&self.magnet_url) {
+            m
+        } else if let Some(u) = nonempty(&self.download_url) {
+            u
+        } else if let Some(h) = nonempty(&self.info_hash) {
+            format!("magnet:?xt=urn:btih:{}&dn={}", h, url_encode(&self.title))
+        } else {
+            return None;
+        };
+
+        // Surface the originating indexer (e.g. "RuTracker", "1337x")
+        // rather than the bare plugin name — Prowlarr aggregates many
+        // trackers and the user wants per-source visibility in the
+        // stream picker.
+        let provider_label = self.indexer
+            .as_deref()
+            .filter(|i| !i.is_empty())
+            .unwrap_or(provider)
+            .to_string();
+
+        Some(Stream {
+            url,
+            title: self.title.clone(),
+            provider: provider_label,
+            quality: extract_quality(&self.title),
+            codec:   extract_codec(&self.title),
+            source:  extract_source(&self.title),
+            hdr:     extract_hdr(&self.title),
+            seeders: if self.seeders >= 0 { Some(self.seeders as u32) } else { None },
+            size_bytes: if self.size > 0 { Some(self.size) } else { None },
+            language: None,
+            subtitles: vec![],
+        })
+    }
+
     fn into_entry(self, kind: EntryKind) -> PluginEntry {
         // Quality hint from title
         let quality = extract_quality(&self.title);
         let size_str = humanize_bytes(self.size);
+        let indexer = self.indexer.as_deref().unwrap_or("");
         let meta = format!(
             "{size_str}  ↑{} ↓{}  {indexer}",
             self.seeders,
             self.leechers,
-            indexer = self.indexer,
         );
 
         // Pack infoHash and downloadUrl into the ID so resolve() can use them
         // without a second network call.
-        let id = format!("{}|{}", self.info_hash, self.download_url);
+        let id = format!(
+            "{}|{}",
+            self.info_hash.as_deref().unwrap_or(""),
+            self.download_url.as_deref().unwrap_or(""),
+        );
 
         let imdb_id = self.imdb_id.filter(|&i| i > 0).map(|i| format!("tt{:07}", i));
 
@@ -228,7 +300,9 @@ impl ProwlarrResult {
         // size/seeders/indexer meta — PluginEntry.rating is f32 and
         // "1080p"/"4K" aren't ratings. Quality first, then the meta line,
         // then protocol/info-url context so the row remains scannable.
-        let tail = format!("Protocol: {}  InfoURL: {}", self.protocol, self.info_url);
+        let protocol = self.protocol.as_deref().unwrap_or("");
+        let info_url = self.info_url.as_deref().unwrap_or("");
+        let tail = format!("Protocol: {protocol}  InfoURL: {info_url}");
         let description = match quality {
             Some(q) => Some(format!("{q} · {meta} · {tail}")),
             None => Some(format!("{meta} · {tail}")),
@@ -321,6 +395,46 @@ fn parse_entry_id(id: &str) -> (String, String) {
     }
 }
 
+/// Build a torznab-friendly query from a `FindStreamsRequest`.
+fn build_query(req: &FindStreamsRequest) -> String {
+    match (req.season, req.episode) {
+        (Some(s), Some(e)) => format!("{} S{:02}E{:02}", req.title, s, e),
+        (Some(s), None)    => format!("{} S{:02}",      req.title, s),
+        _ => match req.year {
+            Some(y) => format!("{} {}", req.title, y),
+            None    => req.title.clone(),
+        },
+    }
+}
+
+/// Detect encoding codec from release title.
+fn extract_codec(title: &str) -> Option<String> {
+    let t = title.to_uppercase();
+    if t.contains("X265") || t.contains("H.265") || t.contains("HEVC") { return Some("h265".into()); }
+    if t.contains("AV1") { return Some("av1".into()); }
+    if t.contains("X264") || t.contains("H.264") || t.contains("AVC") { return Some("h264".into()); }
+    None
+}
+
+/// Detect source class from release title.
+fn extract_source(title: &str) -> Option<String> {
+    let t = title.to_uppercase();
+    for (tag, label) in [
+        ("BLURAY", "BluRay"), ("BDREMUX", "BDRemux"),
+        ("WEB-DL", "WEB-DL"), ("WEBDL", "WEB-DL"), ("WEBRIP", "WEBRip"),
+        ("HDTV", "HDTV"), ("DVDRIP", "DVDRip"),
+        ("HDCAM", "CAM"), ("CAM", "CAM"), ("TS", "TS"),
+    ] { if t.contains(tag) { return Some(label.into()); } }
+    None
+}
+
+/// True when the release title advertises any HDR format.
+fn extract_hdr(title: &str) -> bool {
+    let t = title.to_uppercase();
+    t.contains("HDR10+") || t.contains("HDR10") || t.contains("HDR")
+        || t.contains("DOLBY VISION") || t.contains("DV ") || t.contains(" DV.")
+}
+
 /// Try to extract a quality string from a release title.
 fn extract_quality(title: &str) -> Option<String> {
     let t = title.to_uppercase();
@@ -357,4 +471,4 @@ fn humanize_bytes(bytes: u64) -> String {
 
 // ── WASM exports ──────────────────────────────────────────────────────────────
 
-stui_export_plugin!(ProwlarrProvider);
+stui_export_catalog_plugin!(ProwlarrProvider);

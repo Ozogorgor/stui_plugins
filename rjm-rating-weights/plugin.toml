@@ -1,0 +1,14 @@
+[plugin]
+id           = "rjm-rating-weights"
+name         = "rjm-rating-weights"
+version      = "1.0.0"
+abi_version  = 1
+description  = "Custom rating source weights for RYM and other metadata providers"
+
+[capabilities]
+catalog = true
+
+[meta]
+author   = "stui"
+license  = "Apache-2.0"
+homepage = "https://github.com/Ozogorgor/stui_plugins"
